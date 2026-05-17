@@ -907,7 +907,6 @@ class PacketDecryptor:
         self.box: EncryptionBox = self._make_box(secret_key)
         self._voice_client = voice_client
         self._stats = stats
-        self._dave_audio_strip_logged: bool = False
         self._pending_inner_packets: dict[int, list[PendingInnerPacket]] = defaultdict(list)
         self._pending_inner_ready: list[RTPPacket] = []
         self._pending_inner_max_per_ssrc = 128
@@ -1234,15 +1233,10 @@ class PacketDecryptor:
                 return inner_plain
 
             if parsed.ranges_count == 0 and 0 < parsed.ciphertext_len <= len(result):
-                result = result[:parsed.ciphertext_len]
-                packet.extension_data['_voice_recv_needs_dave_inner_decrypt'] = False
-                packet.extension_data['_voice_recv_dave_ranges_count'] = 0
-                self._inc('dave_strip_success')
-                if not self._dave_audio_strip_logged:
-                    self._dave_audio_strip_logged = True
-                    log.info(
-                        "DAVE audio strip enabled: marker detected, trimming supplemental trailer before Opus decode"
-                    )
+                self._inc('dave_inner_unavailable_drop')
+                raise CryptoError(
+                    f"DAVE inner decrypt unavailable: ssrc={packet.ssrc} seq={packet.sequence} reason={inner_reason}"
+                )
             else:
                 self._inc('dave_inner_unresolved_packets')
                 if parsed.ranges_count > 0:
