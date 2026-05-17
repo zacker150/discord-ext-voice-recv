@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import struct
+from pprint import pformat
 
 from discord.enums import SpeakingState, try_enum
 
@@ -119,7 +120,7 @@ async def hook(self: DiscordVoiceWebSocket, msg: Dict[str, Any]):
     vc: VoiceRecvClient = self._connection.voice_client  # type: ignore
 
     if op not in (3, 6):
-        from pprint import pformat
+
 
         log.debug("Received op %s: \n%s", op, pformat(data, compact=True))
 
