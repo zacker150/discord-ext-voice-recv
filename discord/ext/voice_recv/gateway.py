@@ -193,4 +193,6 @@ async def hook(self: DiscordVoiceWebSocket, msg: Dict[str, Any]):
         )
 
     elif op in DAVE_AND_MLS_OPCODES:
+        if op == DAVE_EXECUTE_TRANSITION and vc._reader:
+            vc._reader.analysis_stats.reset_all_dave_nonces()
         vc.dispatch("voice_dave_opcode", op, data)

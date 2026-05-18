@@ -331,6 +331,12 @@ class ReceiveAnalysisStats:
             self._dave_nonce_last[ssrc] = nonce
             self._dave_seq_last[ssrc] = seq
 
+    def reset_all_dave_nonces(self) -> None:
+        with self._lock:
+            self._dave_nonce_last.clear()
+            self._dave_seq_last.clear()
+            self._counters['dave_nonce_epoch_reset'] += 1
+
     def add_dave_unhandled_sample(
         self,
         *,
