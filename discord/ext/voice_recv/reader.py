@@ -1238,40 +1238,57 @@ class PacketDecryptor:
                 packet.extension_data['_voice_recv_dave_ranges_count'] = 0
                 return inner_plain
 
-            if parsed.ranges_count == 0 and 0 < parsed.ciphertext_len <= len(result):
-                self._inc('dave_inner_unavailable_drop')
-                raise CryptoError(
-                    f"DAVE inner decrypt unavailable: ssrc={packet.ssrc} seq={packet.sequence} reason={inner_reason}"
+            self._inc('dave_inner_unresolved_packets')
+            if parsed.ranges_count > 0:
+                self._inc('dave_ranges_nonzero')
+
+            if self._is_retryable_inner_reason(inner_reason):
+                self._defer_pending_inner_packet(
+                    packet=packet,
+                    payload=result,
+                    reason=inner_reason,
+                    ranges_count=parsed.ranges_count,
+                )
+                self._inc('dave_inner_deferred')
+                if parsed.ranges_count > 0:
+                    self._inc('dave_ranges_nonzero_deferred')
+                self._add_dave_unhandled_sample(
+                    reason=f'inner_deferred_{inner_reason}',
+                    packet=packet,
+                    payload_len=len(result),
+                    has_marker=has_marker,
+                    ciphertext_len=parsed.ciphertext_len,
+                    ranges_count=parsed.ranges_count,
                 )
             else:
-                self._inc('dave_inner_unresolved_packets')
-                if parsed.ranges_count > 0:
-                    self._inc('dave_ranges_nonzero')
-                    if self._is_retryable_inner_reason(inner_reason):
-                        self._defer_pending_inner_packet(
-                            packet=packet,
-                            payload=result,
-                            reason=inner_reason,
-                            ranges_count=parsed.ranges_count,
-                        )
-                        self._inc('dave_ranges_nonzero_deferred')
-                        self._add_dave_unhandled_sample(
-                            reason=f'ranges_nonzero_deferred_{inner_reason}',
-                            packet=packet,
-                            payload_len=len(result),
-                            has_marker=has_marker,
-                            ciphertext_len=parsed.ciphertext_len,
-                            ranges_count=parsed.ranges_count,
-                        )
-                    else:
-                        self._add_dave_unhandled_sample(
-                            reason=f'ranges_nonzero_{inner_reason}',
-                            packet=packet,
-                            payload_len=len(result),
-                            has_marker=has_marker,
-                            ciphertext_len=parsed.ciphertext_len,
-                            ranges_count=parsed.ranges_count,
-                        )
+                self._inc('dave_inner_unavailable_skipped')
+                log.warning(
+                    "DAVE inner decrypt unavailable; skipping packet: ssrc=%s seq=%s ts=%s reason=%s ranges=%s ciphertext_len=%s",
+                    packet.ssrc,
+                    packet.sequence,
+                    packet.timestamp,
+                    inner_reason,
+                    parsed.ranges_count,
+                    parsed.ciphertext_len,
+                )
+                if parsed.ranges_count == 0 and 0 < parsed.ciphertext_len <= len(result):
+                    self._add_dave_unhandled_sample(
+                        reason=f'inner_unavailable_{inner_reason}',
+                        packet=packet,
+                        payload_len=len(result),
+                        has_marker=has_marker,
+                        ciphertext_len=parsed.ciphertext_len,
+                        ranges_count=parsed.ranges_count,
+                    )
+                elif parsed.ranges_count > 0:
+                    self._add_dave_unhandled_sample(
+                        reason=f'ranges_nonzero_{inner_reason}',
+                        packet=packet,
+                        payload_len=len(result),
+                        has_marker=has_marker,
+                        ciphertext_len=parsed.ciphertext_len,
+                        ranges_count=parsed.ranges_count,
+                    )
                 else:
                     self._add_dave_unhandled_sample(
                         reason=f'invalid_ciphertext_len_{inner_reason}',
@@ -1281,7 +1298,7 @@ class PacketDecryptor:
                         ciphertext_len=parsed.ciphertext_len,
                         ranges_count=parsed.ranges_count,
                     )
-                self._inc('dave_strip_unhandled')
+            self._inc('dave_strip_unhandled')
         else:
             if has_marker:
                 self._inc('dave_parse_fail')
