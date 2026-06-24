@@ -1303,6 +1303,8 @@ class PacketDecryptor:
             if has_marker:
                 self._inc('dave_parse_fail')
                 self._inc('dave_strip_unhandled')
+                packet.extension_data['_voice_recv_needs_dave_inner_decrypt'] = True
+                packet.extension_data['_voice_recv_pending_inner_decrypt'] = False
                 self._add_dave_unhandled_sample(
                     reason='parse_fail',
                     packet=packet,
