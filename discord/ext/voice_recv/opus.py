@@ -7,6 +7,7 @@ import logging
 from typing import TYPE_CHECKING, Final
 
 from .buffer import HeapJitterBuffer as JitterBuffer
+from .dave import parse_dave_payload
 from .rtp import FakePacket
 from .utils import add_wrapped
 
@@ -119,6 +120,22 @@ class PacketDecoder:
                 exc_text=str(exc),
             )
 
+    @staticmethod
+    def _packet_needs_inner_decrypt(packet: AudioPacket) -> bool:
+        ext = getattr(packet, 'extension_data', None)
+        return isinstance(ext, dict) and bool(
+            ext.get('_voice_recv_needs_dave_inner_decrypt')
+            or ext.get('_voice_recv_pending_inner_decrypt')
+        )
+
+    @staticmethod
+    def _payload_looks_like_dave(payload: bytes) -> bool:
+        return (
+            len(payload) > 10
+            and payload[-2:] == b'\xfa\xfa'
+            and parse_dave_payload(payload) is not None
+        )
+
     def _get_user(self, user_id: int) -> Optional[User]:
         vc: VoiceRecvClient = self.sink.voice_client  # type: ignore
         return vc.guild.get_member(user_id) or vc.client.get_user(user_id)
@@ -203,13 +220,17 @@ class PacketDecoder:
 
         # Decode as per usual
         if packet:
-            ext = getattr(packet, 'extension_data', None)
-            if isinstance(ext, dict) and ext.get('_voice_recv_needs_dave_inner_decrypt'):
+            if self._packet_needs_inner_decrypt(packet):
                 self._stats_inc('dave_inner_decode_skipped')
                 self._stats_add_pcm(0)
                 return packet, b''
 
             payload: bytes = packet.decrypted_data or b''
+            if self._payload_looks_like_dave(payload):
+                self._stats_inc('dave_wrapped_decode_skipped')
+                self._stats_add_pcm(0)
+                return packet, b''
+
             frames: Optional[int] = None
             samples_per_frame: Optional[int] = None
             frame_size: Optional[int] = None
@@ -232,6 +253,11 @@ class PacketDecoder:
                 header_ok=header_ok,
                 packet=packet,
             )
+            if not header_ok:
+                self._stats_inc('opus_invalid_header_skipped')
+                self._stats_add_pcm(0)
+                return packet, b''
+
             try:
                 pcm = self._decoder.decode(payload, fec=False)
                 self._stats_inc('opus_decode_ok')
@@ -263,6 +289,14 @@ class PacketDecoder:
 
         if next_packet is not None:
             nextdata: bytes = next_packet.decrypted_data  # type: ignore
+
+            if self._packet_needs_inner_decrypt(next_packet) or self._payload_looks_like_dave(
+                nextdata
+            ):
+                self._stats_inc('dave_inner_fec_skipped')
+                pcm = b''
+                self._stats_add_pcm(0)
+                return packet, pcm
 
             log.debug(
                 "Generating fec packet: fake=%s, fec=%s",

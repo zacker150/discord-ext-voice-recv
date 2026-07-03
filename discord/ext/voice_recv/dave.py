@@ -27,7 +27,7 @@ class DaveSupplemental:
 
 
 def parse_dave_payload(payload: bytes) -> Optional[DaveSupplemental]:
-    if len(payload) < 2 or payload[-2:] != _DAVE_MARKER:
+    if payload[-2:] != _DAVE_MARKER:
         return None
     if len(payload) <= 10:
         return None

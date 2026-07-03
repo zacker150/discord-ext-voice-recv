@@ -331,6 +331,12 @@ class ReceiveAnalysisStats:
             self._dave_nonce_last[ssrc] = nonce
             self._dave_seq_last[ssrc] = seq
 
+    def reset_all_dave_nonces(self) -> None:
+        with self._lock:
+            self._dave_nonce_last.clear()
+            self._dave_seq_last.clear()
+            self._counters['dave_nonce_epoch_reset'] += 1
+
     def add_dave_unhandled_sample(
         self,
         *,
@@ -907,7 +913,6 @@ class PacketDecryptor:
         self.box: EncryptionBox = self._make_box(secret_key)
         self._voice_client = voice_client
         self._stats = stats
-        self._dave_audio_strip_logged: bool = False
         self._pending_inner_packets: dict[int, list[PendingInnerPacket]] = defaultdict(list)
         self._pending_inner_ready: list[RTPPacket] = []
         self._pending_inner_max_per_ssrc = 128
@@ -1233,45 +1238,57 @@ class PacketDecryptor:
                 packet.extension_data['_voice_recv_dave_ranges_count'] = 0
                 return inner_plain
 
-            if parsed.ranges_count == 0 and 0 < parsed.ciphertext_len <= len(result):
-                result = result[:parsed.ciphertext_len]
-                packet.extension_data['_voice_recv_needs_dave_inner_decrypt'] = False
-                packet.extension_data['_voice_recv_dave_ranges_count'] = 0
-                self._inc('dave_strip_success')
-                if not self._dave_audio_strip_logged:
-                    self._dave_audio_strip_logged = True
-                    log.info(
-                        "DAVE audio strip enabled: marker detected, trimming supplemental trailer before Opus decode"
-                    )
-            else:
-                self._inc('dave_inner_unresolved_packets')
+            self._inc('dave_inner_unresolved_packets')
+            if parsed.ranges_count > 0:
+                self._inc('dave_ranges_nonzero')
+
+            if self._is_retryable_inner_reason(inner_reason):
+                self._defer_pending_inner_packet(
+                    packet=packet,
+                    payload=result,
+                    reason=inner_reason,
+                    ranges_count=parsed.ranges_count,
+                )
+                self._inc('dave_inner_deferred')
                 if parsed.ranges_count > 0:
-                    self._inc('dave_ranges_nonzero')
-                    if self._is_retryable_inner_reason(inner_reason):
-                        self._defer_pending_inner_packet(
-                            packet=packet,
-                            payload=result,
-                            reason=inner_reason,
-                            ranges_count=parsed.ranges_count,
-                        )
-                        self._inc('dave_ranges_nonzero_deferred')
-                        self._add_dave_unhandled_sample(
-                            reason=f'ranges_nonzero_deferred_{inner_reason}',
-                            packet=packet,
-                            payload_len=len(result),
-                            has_marker=has_marker,
-                            ciphertext_len=parsed.ciphertext_len,
-                            ranges_count=parsed.ranges_count,
-                        )
-                    else:
-                        self._add_dave_unhandled_sample(
-                            reason=f'ranges_nonzero_{inner_reason}',
-                            packet=packet,
-                            payload_len=len(result),
-                            has_marker=has_marker,
-                            ciphertext_len=parsed.ciphertext_len,
-                            ranges_count=parsed.ranges_count,
-                        )
+                    self._inc('dave_ranges_nonzero_deferred')
+                self._add_dave_unhandled_sample(
+                    reason=f'inner_deferred_{inner_reason}',
+                    packet=packet,
+                    payload_len=len(result),
+                    has_marker=has_marker,
+                    ciphertext_len=parsed.ciphertext_len,
+                    ranges_count=parsed.ranges_count,
+                )
+            else:
+                self._inc('dave_inner_unavailable_skipped')
+                log.warning(
+                    "DAVE inner decrypt unavailable; skipping packet: ssrc=%s seq=%s ts=%s reason=%s ranges=%s ciphertext_len=%s",
+                    packet.ssrc,
+                    packet.sequence,
+                    packet.timestamp,
+                    inner_reason,
+                    parsed.ranges_count,
+                    parsed.ciphertext_len,
+                )
+                if parsed.ranges_count == 0 and 0 < parsed.ciphertext_len <= len(result):
+                    self._add_dave_unhandled_sample(
+                        reason=f'inner_unavailable_{inner_reason}',
+                        packet=packet,
+                        payload_len=len(result),
+                        has_marker=has_marker,
+                        ciphertext_len=parsed.ciphertext_len,
+                        ranges_count=parsed.ranges_count,
+                    )
+                elif parsed.ranges_count > 0:
+                    self._add_dave_unhandled_sample(
+                        reason=f'ranges_nonzero_{inner_reason}',
+                        packet=packet,
+                        payload_len=len(result),
+                        has_marker=has_marker,
+                        ciphertext_len=parsed.ciphertext_len,
+                        ranges_count=parsed.ranges_count,
+                    )
                 else:
                     self._add_dave_unhandled_sample(
                         reason=f'invalid_ciphertext_len_{inner_reason}',
@@ -1281,11 +1298,13 @@ class PacketDecryptor:
                         ciphertext_len=parsed.ciphertext_len,
                         ranges_count=parsed.ranges_count,
                     )
-                self._inc('dave_strip_unhandled')
+            self._inc('dave_strip_unhandled')
         else:
             if has_marker:
                 self._inc('dave_parse_fail')
                 self._inc('dave_strip_unhandled')
+                packet.extension_data['_voice_recv_needs_dave_inner_decrypt'] = True
+                packet.extension_data['_voice_recv_pending_inner_decrypt'] = False
                 self._add_dave_unhandled_sample(
                     reason='parse_fail',
                     packet=packet,
