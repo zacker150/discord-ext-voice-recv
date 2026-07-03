@@ -9,7 +9,7 @@ Voice receive extension package for discord.py
 See the [update notes](update_notes.md) for a poor excuse for a changelog.
 
 ## Installing
-**Python 3.9 or higher is required**, preferably at least 3.11 or whatever is latest
+**Python 3.10 or higher is required**, preferably at least 3.11 or whatever is latest
 
 ```
 python -m pip install discord-ext-voice-recv
