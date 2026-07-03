@@ -9,7 +9,7 @@ Voice receive extension package for discord.py
 See the [update notes](update_notes.md) for a poor excuse for a changelog.
 
 ## Installing
-**Python 3.8 or higher is required**, preferably at least 3.11 or whatever is latest
+**Python 3.9 or higher is required**, preferably at least 3.11 or whatever is latest
 
 ```
 python -m pip install discord-ext-voice-recv
@@ -21,6 +21,15 @@ python -m pip install git+https://github.com/imayhaveborkedit/discord-ext-voice-
 ```
 
 Naturally, this extension depends on `discord.py` being installed with voice support (`pynacl`).
+
+## Development
+This project uses `uv` for dependency management and builds.
+
+```
+uv sync
+uv run python examples/recv.py
+uv build
+```
 
 ## Example
 See the [example script](examples/recv.py).
