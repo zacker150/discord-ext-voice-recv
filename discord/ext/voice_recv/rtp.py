@@ -200,10 +200,6 @@ class RTPPacket(_PacketCmpMixin):
             self.csrcs = struct.unpack(fmt, data[12:offset])
             self.data = data[offset:]
 
-        # RTP padding (the P bit) is stripped from the *decrypted* payload via
-        # strip_padding(); the padding octets live inside the encrypted payload,
-        # so they cannot be removed here.
-
     def adjust_rtpsize(self):
         """Adjusts the packet header and data based on the rtpsize format."""
 
@@ -255,20 +251,7 @@ class RTPPacket(_PacketCmpMixin):
         return offset
 
     def strip_padding(self, payload: bytes) -> bytes:
-        """Remove RTP padding (RFC 3550 §5.1) from a decrypted payload.
-
-        When the padding (P) bit is set, the final octet of the payload holds
-        the number of padding octets appended -- including that octet itself.
-        Discord sets this bit on some voice packets (both media frames carrying
-        a few trailing octets and all-padding bandwidth-probe packets), so the
-        padding must be removed before the payload is treated as an Opus frame.
-
-        The padding lives inside the encrypted payload, so this can only run on
-        the decrypted bytes. Left in place it corrupts the Opus packet handed to
-        libopus, and for DAVE (E2EE) frames it hides the trailing 0xFAFA
-        supplemental marker -- so the E2EE layer never claims the packet and the
-        raw ciphertext reaches the decoder as an invalid/"corrupted stream".
-        """
+        """Strip RTP padding (RFC 3550 §5.1) from a decrypted payload when the P bit is set."""
         if not self.padding or not payload:
             return payload
 
