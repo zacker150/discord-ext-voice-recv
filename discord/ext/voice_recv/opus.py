@@ -26,6 +26,8 @@ if TYPE_CHECKING:
 
 log = logging.getLogger(__name__)
 
+DEFAULT_MAX_CONCEAL_FRAMES: Final = 25
+
 __all__ = [
     'VoiceData',
 ]
@@ -47,12 +49,15 @@ class VoiceData:
 
 
 class PacketDecoder:
-    def __init__(self, router: PacketRouter, ssrc: int):
+    MAX_CONCEAL_FRAMES: Final = DEFAULT_MAX_CONCEAL_FRAMES
+
+    def __init__(self, router: PacketRouter, ssrc: int, *, max_conceal_frames: Optional[int] = None):
         self.router: PacketRouter = router
         self.ssrc: int = ssrc
 
         self._decoder: Optional[Decoder] = None if self.sink.wants_opus() else Decoder()
         self._buffer: JitterBuffer = JitterBuffer()
+        self.max_conceal_frames: int = self._get_max_conceal_frames(max_conceal_frames)
         self._cached_id: Optional[int] = None
 
         self._last_seq: int = -1
@@ -71,6 +76,11 @@ class PacketDecoder:
         stats = getattr(self.router.reader, 'analysis_stats', None)
         if stats:
             stats.add_pcm(pcm_len)
+
+    @classmethod
+    def _get_max_conceal_frames(cls, configured: Optional[int]) -> int:
+        value = cls.MAX_CONCEAL_FRAMES if configured is None else configured
+        return max(0, value)
 
     def _stats_add_opus_probe(
         self,
@@ -183,7 +193,13 @@ class PacketDecoder:
             if self._buffer:
                 # If the next packet is not sequential yet, emit one synthetic
                 # packet and advance the jitter buffer cursor for PLC/FEC flow.
-                if self._buffer.gap() > 0:
+                gap = self._buffer.gap()
+                if gap > self.max_conceal_frames:
+                    self._buffer.resync_to_next()
+                    self._stats_inc('jitter_resync')
+                    return
+
+                if gap > 0:
                     self._buffer.advance()
                     self._stats_inc('jitter_synthetic_packets')
                     return self._make_fakepacket()

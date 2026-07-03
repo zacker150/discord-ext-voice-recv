@@ -65,6 +65,11 @@ combine_as_imports = true
 combine_star = true
 line_length = 125
 
+[tool.pytest.ini_options]
+testpaths = [
+    "tests",
+]
+
 [tool.pyright]
 include = [
     "discord/ext/voice_recv",
@@ -78,3 +83,8 @@ reportUnnecessaryTypeIgnoreComment = "warning"
 # reportUnusedImport = "error"
 pythonVersion = "3.10"
 typeCheckingMode = "basic"
+
+[dependency-groups]
+dev = [
+    "pytest>=9.1.1",
+]
