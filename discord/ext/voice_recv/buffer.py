@@ -234,6 +234,18 @@ class HeapJitterBuffer(BaseBuffer[PacketT]):
         self._last_tx_seq = add_wrapped(self._last_tx_seq, count)
         self._update_has_item()
 
+    def resync_to_next(self) -> None:
+        """
+        Move the transmit cursor directly before the next buffered packet.
+        Used to skip discontinuities that are too large to conceal.
+        """
+
+        if not self._buffer:
+            return
+
+        self._last_tx_seq = add_wrapped(self._buffer[0].sequence, -1)
+        self._update_has_item()
+
     def flush(self) -> List[AudioPacket]:
         """
         Return all remaining packets.
