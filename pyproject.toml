@@ -1,6 +1,59 @@
 [build-system]
-requires = ["setuptools", "wheel"]
+requires = ["setuptools>=82.0.1", "wheel>=0.47.0"]
 build-backend = "setuptools.build_meta"
+
+[project]
+name = "discord-ext-voice-recv"
+version = "0.5.3a191"
+description = "Experimental voice receive extension for discord.py"
+readme = "README.md"
+requires-python = ">=3.10"
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [
+    { name = "Imayhaveborkedit" },
+    { name = "Victor Zeng", email = "zacker150@hotmail.com" },
+]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "Natural Language :: English",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+    "Operating System :: POSIX",
+    "Operating System :: Microsoft :: Windows",
+    "Operating System :: MacOS",
+    "Topic :: Multimedia :: Sound/Audio :: Capture/Recording",
+]
+dependencies = [
+    "discord.py[voice]>=2.7.1",
+]
+
+[project.optional-dependencies]
+extras_speech = [
+    "SpeechRecognition>=3.17.0",
+]
+extras_local = [
+    "PyAudio>=0.2.14",
+]
+extras = [
+    "SpeechRecognition>=3.17.0",
+    "PyAudio>=0.2.14",
+]
+
+[project.urls]
+Homepage = "https://github.com/imayhaveborkedit/discord-ext-voice-recv"
+
+[tool.setuptools]
+packages = [
+    "discord.ext.voice_recv",
+    "discord.ext.voice_recv.extras",
+]
+zip-safe = false
+include-package-data = true
 
 [tool.black]
 line-length = 125
@@ -23,5 +76,5 @@ exclude = [
 ]
 reportUnnecessaryTypeIgnoreComment = "warning"
 # reportUnusedImport = "error"
-pythonVersion = "3.8"
+pythonVersion = "3.10"
 typeCheckingMode = "basic"
