@@ -2,17 +2,11 @@
 
 from __future__ import annotations
 
-import importlib.util
-import sys
-import types
-from pathlib import Path
+from unittest.mock import MagicMock, create_autospec
 
-import pytest
-
-
-ROOT = Path(__file__).resolve().parents[1]
-PACKAGE = 'discord.ext.voice_recv'
-PACKAGE_ROOT = ROOT / 'discord' / 'ext' / 'voice_recv'
+from discord.ext.voice_recv.buffer import HeapJitterBuffer
+from discord.ext.voice_recv.opus import PacketDecoder
+from discord.ext.voice_recv.sinks import AudioSink
 
 
 class Packet:
@@ -27,70 +21,8 @@ class Packet:
         return self.sequence < other.sequence
 
 
-@pytest.fixture
-def voice_recv_modules(monkeypatch):
-    managed_names = {'discord', 'discord.ext', 'discord.opus'}
-
-    def is_managed_module(module_name: str) -> bool:
-        return module_name in managed_names or module_name == PACKAGE or module_name.startswith(f'{PACKAGE}.')
-
-    for module_name in list(sys.modules):
-        if is_managed_module(module_name):
-            monkeypatch.delitem(sys.modules, module_name, raising=False)
-
-    for package_name, path in (
-        ('discord', ROOT / 'discord'),
-        ('discord.ext', ROOT / 'discord' / 'ext'),
-        (PACKAGE, PACKAGE_ROOT),
-    ):
-        package = types.ModuleType(package_name)
-        package.__path__ = [str(path)]
-        monkeypatch.setitem(sys.modules, package_name, package)
-
-    def load_voice_recv_module(name: str):
-        full_name = f'{PACKAGE}.{name}'
-        module = sys.modules.get(full_name)
-        if module is not None:
-            return module
-
-        spec = importlib.util.spec_from_file_location(full_name, PACKAGE_ROOT / f'{name}.py')
-        assert spec is not None and spec.loader is not None
-
-        module = importlib.util.module_from_spec(spec)
-        monkeypatch.setitem(sys.modules, full_name, module)
-        spec.loader.exec_module(module)
-        return module
-
-    def load_opus_module():
-        discord_opus = types.ModuleType('discord.opus')
-
-        class Decoder:
-            SAMPLES_PER_FRAME = 960
-
-            def decode(self, *args, **kwargs) -> bytes:
-                return b''
-
-        class OpusError(Exception):
-            pass
-
-        discord_opus.Decoder = Decoder
-        discord_opus.OpusError = OpusError
-        monkeypatch.setitem(sys.modules, 'discord.opus', discord_opus)
-        return load_voice_recv_module('opus')
-
-    yield types.SimpleNamespace(
-        load_voice_recv_module=load_voice_recv_module,
-        load_opus_module=load_opus_module,
-    )
-
-    for module_name in list(sys.modules):
-        if is_managed_module(module_name):
-            sys.modules.pop(module_name, None)
-
-
-def make_gap_buffer(voice_recv_modules, start_sequence: int, next_sequence: int):
-    buffer_module = voice_recv_modules.load_voice_recv_module('buffer')
-    buffer = buffer_module.HeapJitterBuffer(maxsize=4, prefsize=0, prefill=0)
+def make_gap_buffer(start_sequence: int, next_sequence: int) -> HeapJitterBuffer:
+    buffer = HeapJitterBuffer(maxsize=4, prefsize=0, prefill=0)
     buffer._threshold = 65535
 
     assert buffer.push(Packet(start_sequence))
@@ -101,21 +33,26 @@ def make_gap_buffer(voice_recv_modules, start_sequence: int, next_sequence: int)
     return buffer
 
 
-def make_decoder(voice_recv_modules, buffer, *, max_conceal_frames: int = 25):
-    opus_module = voice_recv_modules.load_opus_module()
-    decoder = object.__new__(opus_module.PacketDecoder)
-    decoder.ssrc = 1
+def make_decoder(buffer: HeapJitterBuffer, *, max_conceal_frames: int = 25) -> PacketDecoder:
+    # __init__ calls sink.wants_opus(); True keeps it from constructing a real Decoder()
+    # (these tests exercise the jitter buffer, not decoding). The router can't be
+    # autospec'd -- its sink/reader are instance attributes set in __init__ -- so spec
+    # the sink, the collaborator whose method the decoder actually calls.
+    sink = create_autospec(AudioSink, instance=True)
+    sink.wants_opus.return_value = True
+    router = MagicMock()
+    router.sink = sink
+    decoder = PacketDecoder(router, ssrc=1, max_conceal_frames=max_conceal_frames)
+    # Point the decoder at the pre-built gap buffer and align its tx cursor with it.
     decoder._buffer = buffer
-    decoder.max_conceal_frames = max_conceal_frames
     decoder._last_seq = buffer._last_tx_seq
     decoder._last_ts = buffer._last_tx_seq * 960
-    decoder._stats_inc = lambda *args, **kwargs: None
     return decoder
 
 
-def test_large_gap_resyncs_to_next_packet_without_synthetic_frames(voice_recv_modules):
-    buffer = make_gap_buffer(voice_recv_modules, 10, 60011)
-    decoder = make_decoder(voice_recv_modules, buffer)
+def test_large_gap_resyncs_to_next_packet_without_synthetic_frames():
+    buffer = make_gap_buffer(10, 60011)
+    decoder = make_decoder(buffer)
 
     assert buffer.gap() == 60000
     assert decoder._get_next_packet(0) is None
@@ -123,9 +60,9 @@ def test_large_gap_resyncs_to_next_packet_without_synthetic_frames(voice_recv_mo
     assert buffer.pop(timeout=0).sequence == 60011
 
 
-def test_small_gap_still_emits_synthetic_concealment_packet(voice_recv_modules):
-    buffer = make_gap_buffer(voice_recv_modules, 10, 13)
-    decoder = make_decoder(voice_recv_modules, buffer)
+def test_small_gap_still_emits_synthetic_concealment_packet():
+    buffer = make_gap_buffer(10, 13)
+    decoder = make_decoder(buffer)
 
     packet = decoder._get_next_packet(0)
 
@@ -135,8 +72,8 @@ def test_small_gap_still_emits_synthetic_concealment_packet(voice_recv_modules):
     assert buffer.gap() == 1
 
 
-def test_heap_jitter_buffer_resync_bounds_manual_concealment_loop(voice_recv_modules):
-    buffer = make_gap_buffer(voice_recv_modules, 10, 60011)
+def test_heap_jitter_buffer_resync_bounds_manual_concealment_loop():
+    buffer = make_gap_buffer(10, 60011)
     synthetic_count = 0
     max_conceal_frames = 25
 
