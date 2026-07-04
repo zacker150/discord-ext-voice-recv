@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, create_autospec
 
 from discord.ext.voice_recv.buffer import HeapJitterBuffer
 from discord.ext.voice_recv.opus import PacketDecoder
+from discord.ext.voice_recv.sinks import AudioSink
 
 
 class Packet:
@@ -33,10 +34,14 @@ def make_gap_buffer(start_sequence: int, next_sequence: int) -> HeapJitterBuffer
 
 
 def make_decoder(buffer: HeapJitterBuffer, *, max_conceal_frames: int = 25) -> PacketDecoder:
-    # wants_opus=True keeps __init__ from constructing a real Decoder(); these tests
-    # exercise the jitter buffer, not decoding. Stats calls land on the mock router.
+    # __init__ calls sink.wants_opus(); True keeps it from constructing a real Decoder()
+    # (these tests exercise the jitter buffer, not decoding). The router can't be
+    # autospec'd -- its sink/reader are instance attributes set in __init__ -- so spec
+    # the sink, the collaborator whose method the decoder actually calls.
+    sink = create_autospec(AudioSink, instance=True)
+    sink.wants_opus.return_value = True
     router = MagicMock()
-    router.sink.wants_opus.return_value = True
+    router.sink = sink
     decoder = PacketDecoder(router, ssrc=1, max_conceal_frames=max_conceal_frames)
     # Point the decoder at the pre-built gap buffer and align its tx cursor with it.
     decoder._buffer = buffer
