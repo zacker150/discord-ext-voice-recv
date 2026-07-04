@@ -200,8 +200,6 @@ class RTPPacket(_PacketCmpMixin):
             self.csrcs = struct.unpack(fmt, data[12:offset])
             self.data = data[offset:]
 
-        # TODO?: impl padding calculations (though discord doesn't seem to use that bit)
-
     def adjust_rtpsize(self):
         """Adjusts the packet header and data based on the rtpsize format."""
 
@@ -251,6 +249,17 @@ class RTPPacket(_PacketCmpMixin):
             offset -= 4
 
         return offset
+
+    def strip_padding(self, payload: bytes) -> bytes:
+        """Strip RTP padding (RFC 3550 §5.1) from a decrypted payload when the P bit is set."""
+        if not self.padding or not payload:
+            return payload
+
+        pad_len = payload[-1]
+        if 0 < pad_len <= len(payload):
+            return payload[:-pad_len]
+
+        return payload
 
     # https://www.rfcreader.com/#rfc5285_line186
     def _parse_bede_header(self, data: bytes, length: int) -> None:

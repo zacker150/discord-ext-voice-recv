@@ -1157,7 +1157,7 @@ class PacketDecryptor:
             offset = packet.update_ext_headers(result)
             result = result[offset:]
 
-        return result
+        return packet.strip_padding(result)
 
     def _decrypt_rtp_xsalsa20_poly1305(self, packet: RTPPacket) -> bytes:
         nonce = bytearray(24)
@@ -1168,7 +1168,7 @@ class PacketDecryptor:
             offset = packet.update_ext_headers(result)
             result = result[offset:]
 
-        return result
+        return packet.strip_padding(result)
 
     def _decrypt_rtcp_xsalsa20_poly1305(self, data: bytes) -> bytes:
         nonce = bytearray(24)
@@ -1186,7 +1186,7 @@ class PacketDecryptor:
             offset = packet.update_ext_headers(result)
             result = result[offset:]
 
-        return result
+        return packet.strip_padding(result)
 
     def _decrypt_rtcp_xsalsa20_poly1305_suffix(self, data: bytes) -> bytes:
         nonce = data[-24:]
@@ -1205,7 +1205,7 @@ class PacketDecryptor:
             offset = packet.update_ext_headers(result)
             result = result[offset:]
 
-        return result
+        return packet.strip_padding(result)
 
     def _decrypt_rtcp_xsalsa20_poly1305_lite(self, data: bytes) -> bytes:
         nonce = bytearray(24)
