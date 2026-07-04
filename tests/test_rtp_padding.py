@@ -47,30 +47,42 @@ def test_strip_padding_restores_dave_marker():
     assert stripped.endswith(b'\xfa\xfa')
 
 
-def test_strip_padding_empties_all_padding_probe_packet():
-    # All-0xff, len 255, last octet 0xff == 255 == full length: a bandwidth-probe
-    # packet carrying no media. It should collapse to empty, not reach the decoder.
-    rtp = _load_rtp()
-    pkt = _packet(rtp, padding=True)
-    assert pkt.strip_padding(b'\xff' * 255) == b''
-
-
-def test_no_padding_bit_leaves_payload_untouched():
-    rtp = _load_rtp()
-    pkt = _packet(rtp, padding=False)
-    payload = b'\x0d\xfa\xfa\x04\x04\x04\x04'
-    assert pkt.strip_padding(payload) == payload
-
-
 @pytest.mark.parametrize(
-    'payload',
+    'padding, payload, expected',
     [
-        b'',  # empty payload
-        b'\xfa\xfa\x00',  # pad count 0 -> nothing to strip
-        b'\xfa\xfa\x10',  # pad count 16 > len -> corrupt count, leave untouched
+        # P bit clear -> never modified, even when the trailing octet is a valid count.
+        (False, b'', b''),
+        (False, b'\x01\x02\x03', b'\x01\x02\x03'),
+        (False, b'\xaa\xbb\x02', b'\xaa\xbb\x02'),
+        # P bit set, empty payload -> nothing to strip.
+        (True, b'', b''),
+        # P bit set, valid count in 0 < n <= len -> strip the last n octets.
+        (True, b'\xaa\xbb\x01', b'\xaa\xbb'),  # minimum count (1)
+        (True, b'\xaa\xbb\xcc\x02', b'\xaa\xbb'),  # count < len
+        (True, b'\x03\x03\x03', b''),  # count == len (all padding)
+        (True, b'\x01', b''),  # single byte, count == len == 1
+        (True, b'\xff' * 255, b''),  # max-size all-padding probe packet
+        # P bit set, out-of-range count -> corrupt, leave untouched.
+        (True, b'\xaa\xbb\x00', b'\xaa\xbb\x00'),  # count 0
+        (True, b'\xaa\xbb\x04', b'\xaa\xbb\x04'),  # count == len + 1 (just over)
+        (True, b'\xaa\x7f', b'\xaa\x7f'),  # count far over len
+    ],
+    ids=[
+        'no_pbit_empty',
+        'no_pbit_plain',
+        'no_pbit_countlike_tail_ignored',
+        'pbit_empty',
+        'count_min_1',
+        'count_lt_len',
+        'count_eq_len_all_padding',
+        'count_eq_len_single_byte',
+        'count_eq_len_max_probe',
+        'count_zero_ignored',
+        'count_len_plus_1_ignored',
+        'count_far_over_len_ignored',
     ],
 )
-def test_strip_padding_guards_bad_counts(payload):
+def test_strip_padding_edge_cases(padding, payload, expected):
     rtp = _load_rtp()
-    pkt = _packet(rtp, padding=True)
-    assert pkt.strip_padding(payload) == payload
+    pkt = _packet(rtp, padding=padding)
+    assert pkt.strip_padding(payload) == expected
