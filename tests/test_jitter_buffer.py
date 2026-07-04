@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from unittest.mock import MagicMock
+
 from discord.ext.voice_recv.buffer import HeapJitterBuffer
 from discord.ext.voice_recv.opus import PacketDecoder
 
@@ -31,13 +33,15 @@ def make_gap_buffer(start_sequence: int, next_sequence: int) -> HeapJitterBuffer
 
 
 def make_decoder(buffer: HeapJitterBuffer, *, max_conceal_frames: int = 25) -> PacketDecoder:
-    decoder = object.__new__(PacketDecoder)
-    decoder.ssrc = 1
+    # wants_opus=True keeps __init__ from constructing a real Decoder(); these tests
+    # exercise the jitter buffer, not decoding. Stats calls land on the mock router.
+    router = MagicMock()
+    router.sink.wants_opus.return_value = True
+    decoder = PacketDecoder(router, ssrc=1, max_conceal_frames=max_conceal_frames)
+    # Point the decoder at the pre-built gap buffer and align its tx cursor with it.
     decoder._buffer = buffer
-    decoder.max_conceal_frames = max_conceal_frames
     decoder._last_seq = buffer._last_tx_seq
     decoder._last_ts = buffer._last_tx_seq * 960
-    decoder._stats_inc = lambda *args, **kwargs: None
     return decoder
 
 
