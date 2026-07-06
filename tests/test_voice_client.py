@@ -61,6 +61,7 @@ def test_add_ssrc_tracks_audio_mapping_and_updates_reader():
 
 def test_add_ssrc_ignores_zero_and_tracks_non_audio_without_id_reverse_map():
     vc = make_voice_client()
+    vc._reader = SimpleNamespace(packet_router=MagicMock(), flush_pending_unknown_for_ssrc=MagicMock())
 
     vc._add_ssrc(user_id=10, ssrc=0, kind='audio')
     vc._add_ssrc(user_id=10, ssrc=456, kind='video')
@@ -68,6 +69,8 @@ def test_add_ssrc_ignores_zero_and_tracks_non_audio_without_id_reverse_map():
     assert vc._ssrc_to_id == {456: 10}
     assert vc._id_to_ssrc == {}
     assert vc._ssrc_media_kind == {456: 'video'}
+    vc._reader.packet_router.set_user_id.assert_not_called()
+    vc._reader.flush_pending_unknown_for_ssrc.assert_not_called()
 
 
 def test_update_video_ssrcs_tracks_current_streams_and_removes_stale_entries():
@@ -115,6 +118,21 @@ def test_remove_ssrc_clears_audio_and_stream_mappings_and_drops_speaking_state()
     vc._reader.speaking_timer.drop_ssrc.assert_called_once_with(100)
 
 
+def test_remove_ssrc_without_audio_ssrc_still_clears_stream_mappings():
+    vc = make_voice_client()
+    vc._ssrc_to_id = {200: 10}
+    vc._ssrc_media_kind = {200: 'video'}
+    vc._user_stream_ssrcs = {10: {200}}
+    vc._reader = SimpleNamespace(speaking_timer=MagicMock())
+
+    vc._remove_ssrc(user_id=10)
+
+    assert vc._ssrc_to_id == {}
+    assert vc._ssrc_media_kind == {}
+    assert vc._user_stream_ssrcs == {}
+    vc._reader.speaking_timer.drop_ssrc.assert_not_called()
+
+
 def test_get_ssrc_helpers_and_media_kind_default():
     vc = make_voice_client()
     vc._id_to_ssrc = {10: 100}
@@ -129,7 +147,7 @@ def test_get_ssrc_helpers_and_media_kind_default():
 
 def test_record_voice_ws_event_stores_recent_ops_dave_ops_and_pending_events():
     vc = make_voice_client()
-    op = next(iter(DAVE_AND_MLS_OPCODES))
+    op = min(DAVE_AND_MLS_OPCODES)
     event = {'transport': 'json', 'op': op, 'd': {'epoch': 1}}
 
     vc._record_voice_ws_event(event)
@@ -179,6 +197,17 @@ def test_flush_voice_ws_pending_events_moves_events_to_reader_stats():
     assert vc._voice_ws_pending_events == []
 
 
+def test_flush_voice_ws_pending_events_leaves_events_when_reader_has_no_stats():
+    vc = make_voice_client()
+    vc._reader = SimpleNamespace()
+    events = [{'op': 1, 'd': {}}]
+    vc._voice_ws_pending_events = events.copy()
+
+    vc._flush_voice_ws_pending_events()
+
+    assert vc._voice_ws_pending_events == events
+
+
 def test_get_recv_diagnostics_returns_snapshot_when_available():
     vc = make_voice_client()
     vc._reader = SimpleNamespace(analysis_stats=SimpleNamespace(snapshot=MagicMock(return_value={'ok': True})))
@@ -215,6 +244,7 @@ def test_listen_starts_audio_reader_and_flushes_pending_ws_events():
         vc.listen(sink, after='after', debug_ws_path=' path.jsonl ')
 
     reader_cls.assert_called_once_with(sink, vc, after='after', ws_jsonl_path='path.jsonl')
+    assert vc._reader is reader
     reader.start.assert_called_once_with()
     reader.analysis_stats.add_voice_ws_event.assert_called_once_with({'op': 1, 'd': {}})
     assert vc._voice_ws_pending_events == []
@@ -274,4 +304,4 @@ def test_listener_registration_requires_coroutine_and_dispatch_schedules_events(
     vc.client.dispatch.assert_called_once_with('custom', 123)
 
     vc.remove_listener(on_custom)
-    assert vc._event_listeners['on_custom'] == []
+    assert on_custom not in vc._event_listeners.get('on_custom', [])
