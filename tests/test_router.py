@@ -67,6 +67,15 @@ def test_packet_router_feed_rtp_pushes_packets_to_decoder():
     decoder.push_packet.assert_called_once_with(pkt)
 
 
+def test_packet_router_set_sink_replaces_sink():
+    router = PacketRouter(DummySink(), FakeReader())
+    new_sink = DummySink()
+
+    router.set_sink(new_sink)
+
+    assert router.sink is new_sink
+
+
 def test_packet_router_destroy_decoder_drops_ssrc_until_user_id_reappears():
     sink = DummySink()
     reader = FakeReader()
@@ -88,6 +97,15 @@ def test_packet_router_destroy_decoder_drops_ssrc_until_user_id_reappears():
 
     assert 123 not in router._dropped_ssrcs
     replacement.push_packet.assert_called_once()
+
+
+def test_packet_router_set_user_id_clears_dropped_ssrc_without_decoder():
+    router = PacketRouter(DummySink(), FakeReader())
+    router._dropped_ssrcs.append(123)
+
+    router.set_user_id(123, 456)
+
+    assert 123 not in router._dropped_ssrcs
 
 
 def test_packet_router_destroy_all_decoders_marks_each_dropped():
@@ -129,7 +147,8 @@ def test_packet_router_do_run_writes_ready_decoder_data_once():
     decoder.pop_data.return_value = data
 
     class OneShotWaiter:
-        items = [decoder]
+        def __init__(self):
+            self.items = [decoder]
 
         def wait(self):
             router._end_thread.set()
@@ -139,6 +158,40 @@ def test_packet_router_do_run_writes_ready_decoder_data_once():
     router._do_run()
 
     assert sink.writes == [('user', data)]
+
+
+def test_packet_router_do_run_skips_decoders_without_data():
+    sink = DummySink()
+    router = PacketRouter(sink, FakeReader())
+    decoder = MagicMock()
+    decoder.pop_data.return_value = None
+
+    class OneShotWaiter:
+        def __init__(self):
+            self.items = [decoder]
+
+        def wait(self):
+            router._end_thread.set()
+
+    router.waiter = OneShotWaiter()
+
+    router._do_run()
+
+    assert sink.writes == []
+
+
+def test_packet_router_run_stores_error_stops_reader_and_clears_waiter():
+    reader = FakeReader()
+    router = PacketRouter(DummySink(), reader)
+    error = RuntimeError('boom')
+    router._do_run = MagicMock(side_effect=error)
+    router.waiter.clear = MagicMock()
+
+    router.run()
+
+    assert reader.error is error
+    reader.voice_client.stop_listening.assert_called_once_with()
+    router.waiter.clear.assert_called_once_with()
 
 
 def test_packet_router_stop_sets_end_event_and_notifies_waiter():
@@ -197,6 +250,17 @@ def test_sink_event_router_set_sink_replaces_registered_listeners():
     router._dispatch_to_listeners('custom')
 
     assert calls == ['second']
+
+
+def test_sink_event_router_dispatch_queues_event_and_do_run_drains_it():
+    reader = FakeReader()
+    router = SinkEventRouter(DummySink(), reader)
+    router._dispatch_to_listeners = MagicMock(side_effect=lambda *args, **kwargs: router._end_thread.set())
+
+    router.dispatch('custom', 1, named=2)
+    router._do_run()
+
+    router._dispatch_to_listeners.assert_called_once_with('custom', 1, named=2)
 
 
 def test_sink_event_router_listener_exception_does_not_stop_other_listeners():
