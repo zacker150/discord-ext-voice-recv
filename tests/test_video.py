@@ -32,9 +32,8 @@ def test_video_stream_resolution_maps_payload_fields_and_repr():
     assert repr(resolution) == "<VideoStreamResolution width=1280 height=720 type='fixed'>"
 
 
-def test_video_stream_info_maps_payload_fields_and_defaults():
+def test_video_stream_info_maps_payload_fields():
     info = VideoStreamInfo(data=stream_payload(type='screen'))
-    defaulted = VideoStreamInfo(data=stream_payload(type=None))
 
     assert info.type == 'screen'
     assert info.active is True
@@ -46,7 +45,12 @@ def test_video_stream_info_maps_payload_fields_and_defaults():
     assert info.rtx_ssrc == 222
     assert info.ssrc == 111
     assert 'VideoStreamInfo' in repr(info)
-    assert defaulted.type is None
+
+
+def test_video_stream_info_preserves_explicit_none_type():
+    info = VideoStreamInfo(data=stream_payload(type=None))
+
+    assert info.type is None
 
 
 def test_video_stream_info_uses_default_type_and_bitrate_when_keys_missing():

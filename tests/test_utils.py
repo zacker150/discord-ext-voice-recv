@@ -48,6 +48,7 @@ def test_bidict_delete_pop_setdefault_update_and_copy_keep_pairs_in_sync():
     mapping.update({'b': 2}, c=3)
     clone = mapping.copy()
 
+    assert isinstance(clone, Bidict)
     assert clone == mapping
     assert clone is not mapping
     assert mapping.pop('b') == 2
@@ -108,6 +109,7 @@ def test_loop_timer_tracks_loops_and_sleep_duration():
     assert timer.remaining_time == 8.0
 
     now = 30.0
+    assert timer.remaining_time == -10.0
     with patch('discord.ext.voice_recv.utils.time.sleep') as sleep:
         timer.sleep()
     sleep.assert_called_once_with(0)
