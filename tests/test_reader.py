@@ -7,8 +7,10 @@ from collections import defaultdict, deque
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
+from nacl.exceptions import CryptoError
+
 from discord.ext.voice_recv import rtp
-from discord.ext.voice_recv.reader import AudioReader
+from discord.ext.voice_recv.reader import AudioReader, PendingUnknownPacket
 
 
 class Stats:
@@ -112,8 +114,8 @@ def test_flush_pending_unknown_routes_only_audio_packets():
     video = Packet(2)
 
     with reader._pending_unknown_lock:
-        reader._pending_unknown_packets[1].append(SimpleNamespace(packet=audio, queued_at=100.0))
-        reader._pending_unknown_packets[1].append(SimpleNamespace(packet=video, queued_at=100.0))
+        reader._pending_unknown_packets[1].append(PendingUnknownPacket(packet=audio, queued_at=100.0))
+        reader._pending_unknown_packets[1].append(PendingUnknownPacket(packet=video, queued_at=100.0))
 
     with patch('discord.ext.voice_recv.reader.time.monotonic', return_value=100.1):
         reader.flush_pending_unknown_for_ssrc(1)
@@ -158,6 +160,24 @@ def test_route_rtp_unknown_audio_packet_is_queued_for_later_resolution():
     reader.packet_router.feed_rtp.assert_not_called()
 
 
+def test_route_rtp_known_packet_flushes_pending_unknown_audio_first():
+    media_kinds = {1: 'unknown'}
+    reader = make_reader(known_ssrcs={}, media_kind=lambda ssrc: media_kinds[ssrc])
+    queued = Packet(1)
+    current = Packet(1)
+
+    reader._route_rtp_packet(queued)
+    media_kinds[1] = 'audio'
+    reader.voice_client._ssrc_to_id[1] = 10
+    reader._route_rtp_packet(current)
+
+    assert reader.analysis_stats.counters['unknown_ssrc_flushed'] == 1
+    assert reader.speaking_timer.notify.call_args_list[0].args == (1,)
+    assert reader.speaking_timer.notify.call_args_list[1].args == (1,)
+    assert reader.packet_router.feed_rtp.call_args_list[0].args == (queued,)
+    assert reader.packet_router.feed_rtp.call_args_list[1].args == (current,)
+
+
 def test_callback_records_and_drops_non_audio_rtp_before_decrypt():
     reader = make_reader(known_ssrcs={1: 10}, media_kind='video')
     pkt = Packet(1, payload=99)
@@ -188,6 +208,7 @@ def test_callback_records_and_drops_non_audio_rtp_before_decrypt():
 def test_callback_routes_rtcp_packet_after_decrypt():
     reader = make_reader()
     packet = receiver_report_packet()
+    assert packet.type == 201
 
     with patch('discord.ext.voice_recv.reader.rtp.is_rtcp', return_value=True), patch(
         'discord.ext.voice_recv.reader.rtp.decode_rtcp', return_value=packet
@@ -199,6 +220,21 @@ def test_callback_routes_rtcp_packet_after_decrypt():
     reader.packet_router.feed_rtcp.assert_called_once_with(packet)
     assert reader.analysis_stats.counters['rtcp_packets_total'] == 1
     assert reader.analysis_stats.counters['rtcp_type_201'] == 1
+
+
+def test_callback_logs_unexpected_rtcp_packet_before_dispatch():
+    reader = make_reader()
+    packet = rtp.APPPacket(b'\x80\xcc\x00\x00' + (123).to_bytes(4, 'big') + b'TEST')
+    reader._log_unexpected_rtcp_packet = MagicMock()
+
+    with patch('discord.ext.voice_recv.reader.rtp.is_rtcp', return_value=True), patch(
+        'discord.ext.voice_recv.reader.rtp.decode_rtcp', return_value=packet
+    ):
+        reader.decryptor.decrypt_rtcp.return_value = b'plain'
+        reader.callback(b'cipher')
+
+    reader._log_unexpected_rtcp_packet.assert_called_once_with(packet, b'cipher')
+    reader.packet_router.feed_rtcp.assert_called_once_with(packet)
 
 
 def test_callback_routes_recovered_rtp_packets_before_current_packet():
@@ -246,6 +282,20 @@ def test_callback_ignores_ip_discovery_decode_errors():
         'discord.ext.voice_recv.reader.rtp.decode_rtp', side_effect=ValueError('bad packet')
     ):
         reader.callback(data)
+
+    reader.stop.assert_not_called()
+    reader.packet_router.feed_rtp.assert_not_called()
+
+
+def test_callback_swallows_crypto_errors_without_stopping():
+    reader = make_reader(known_ssrcs={1: 10}, media_kind='audio')
+    pkt = Packet(1)
+    reader.decryptor.decrypt_rtp.side_effect = CryptoError('bad decrypt')
+
+    with patch('discord.ext.voice_recv.reader.rtp.is_rtcp', return_value=False), patch(
+        'discord.ext.voice_recv.reader.rtp.decode_rtp', return_value=pkt
+    ):
+        reader.callback(b'packet')
 
     reader.stop.assert_not_called()
     reader.packet_router.feed_rtp.assert_not_called()
