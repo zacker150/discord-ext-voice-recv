@@ -39,7 +39,17 @@ def test_prefill_and_prefsize_delay_readiness_until_enough_packets_arrive():
 
     assert buffer.peek().sequence == 1
     assert buffer.pop(timeout=0).sequence == 1
+    # prefsize=1 keeps one packet buffered before another packet is ready.
     assert buffer.pop(timeout=0) is None
+
+
+def test_peek_requires_more_than_prefsize_packets_unless_all_is_requested():
+    buffer = HeapJitterBuffer(maxsize=4, prefsize=1, prefill=0)
+
+    assert buffer.push(Packet(1)) is True
+
+    assert buffer.peek() is None
+    assert buffer.peek(all=True).sequence == 1
 
 
 def test_overflow_drops_oldest_packets():
@@ -60,6 +70,20 @@ def test_stale_packet_rejected_after_transmit_cursor_advances():
 
     assert buffer.push(Packet(9)) is False
     assert len(buffer) == 0
+
+
+def test_stale_threshold_boundary_is_accepted_but_one_more_is_rejected():
+    accepted = HeapJitterBuffer(maxsize=4, prefsize=0, prefill=0)
+    accepted._threshold = 5
+    assert accepted.push(Packet(10)) is True
+    assert accepted.pop(timeout=0).sequence == 10
+    assert accepted.push(Packet(16)) is True
+
+    rejected = HeapJitterBuffer(maxsize=4, prefsize=0, prefill=0)
+    rejected._threshold = 5
+    assert rejected.push(Packet(10)) is True
+    assert rejected.pop(timeout=0).sequence == 10
+    assert rejected.push(Packet(17)) is False
 
 
 def test_sequence_wraparound_accepts_zero_after_65535():
