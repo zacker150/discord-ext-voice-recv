@@ -273,7 +273,6 @@ def test_ffmpeg_sink_invokes_error_callback_when_stdin_write_fails():
     with patch('discord.ext.voice_recv.sinks.subprocess.Popen', return_value=process):
         sink = FFmpegSink(filename='out.wav', on_error=on_error)
 
-    sink._stdin = process.stdin
     data = voice_data(pcm=b'abcd')
     sink.write('user', data)
 
