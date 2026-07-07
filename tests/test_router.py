@@ -67,13 +67,28 @@ def test_packet_router_feed_rtp_pushes_packets_to_decoder():
     decoder.push_packet.assert_called_once_with(pkt)
 
 
-def test_packet_router_set_sink_replaces_sink():
-    router = PacketRouter(DummySink(), FakeReader())
+def test_packet_router_set_sink_routes_ready_data_to_new_sink():
+    old_sink = DummySink()
     new_sink = DummySink()
+    router = PacketRouter(old_sink, FakeReader())
+    data = SimpleNamespace(source='user')
+    decoder = MagicMock()
+    decoder.pop_data.return_value = data
+
+    class OneShotWaiter:
+        def __init__(self):
+            self.items = [decoder]
+
+        def wait(self):
+            router._end_thread.set()
+
+    router.waiter = OneShotWaiter()
 
     router.set_sink(new_sink)
+    router._do_run()
 
-    assert router.sink is new_sink
+    assert old_sink.writes == []
+    assert new_sink.writes == [('user', data)]
 
 
 def test_packet_router_destroy_decoder_drops_ssrc_until_user_id_reappears():
@@ -88,42 +103,58 @@ def test_packet_router_destroy_decoder_drops_ssrc_until_user_id_reappears():
         router.destroy_decoder(123)
         router.feed_rtp(packet(123))
 
-        assert 123 in router._dropped_ssrcs
         assert router.decoders == {}
         decoder.destroy.assert_called_once_with()
 
         router.set_user_id(123, 456)
         router.feed_rtp(packet(123))
 
-    assert 123 not in router._dropped_ssrcs
     replacement.push_packet.assert_called_once()
 
 
-def test_packet_router_set_user_id_clears_dropped_ssrc_without_decoder():
-    router = PacketRouter(DummySink(), FakeReader())
-    router._dropped_ssrcs.append(123)
+def test_packet_router_set_user_id_allows_new_decoder_after_dropped_ssrc_without_decoder():
+    replacement = MagicMock()
 
-    router.set_user_id(123, 456)
+    with patch('discord.ext.voice_recv.router.PacketDecoder', return_value=replacement):
+        router = PacketRouter(DummySink(), FakeReader())
+        router._dropped_ssrcs.append(123)
 
-    assert 123 not in router._dropped_ssrcs
+        router.set_user_id(123, 456)
+        router.feed_rtp(packet(123))
+
+    replacement.push_packet.assert_called_once()
 
 
-def test_packet_router_destroy_all_decoders_marks_each_dropped():
+def test_packet_router_destroy_all_decoders_destroys_and_temporarily_ignores_each_ssrc():
     sink = DummySink()
     reader = FakeReader()
     first = MagicMock()
     second = MagicMock()
 
-    with patch('discord.ext.voice_recv.router.PacketDecoder', side_effect=[first, second]):
+    with patch('discord.ext.voice_recv.router.PacketDecoder', side_effect=[first, second]) as decoder_cls:
         router = PacketRouter(sink, reader)
         router.get_decoder(1)
         router.get_decoder(2)
         router.destroy_all_decoders()
+        router.feed_rtp(packet(1))
+        router.feed_rtp(packet(2))
 
     assert router.decoders == {}
-    assert list(router._dropped_ssrcs) == [1, 2]
+    assert decoder_cls.call_count == 2
     first.destroy.assert_called_once_with()
     second.destroy.assert_called_once_with()
+
+
+def test_packet_router_set_user_id_allows_packet_after_destroy_all():
+    replacement = MagicMock()
+    router = PacketRouter(DummySink(), FakeReader())
+    router._dropped_ssrcs.append(123)
+
+    with patch('discord.ext.voice_recv.router.PacketDecoder', return_value=replacement):
+        router.set_user_id(123, 456)
+        router.feed_rtp(packet(123))
+
+    replacement.push_packet.assert_called_once()
 
 
 def test_packet_router_feed_rtcp_dispatches_to_event_router_with_guild():
