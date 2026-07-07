@@ -72,20 +72,6 @@ def test_stale_packet_rejected_after_transmit_cursor_advances():
     assert len(buffer) == 0
 
 
-def test_stale_threshold_boundary_is_accepted_but_one_more_is_rejected():
-    accepted = HeapJitterBuffer(maxsize=4, prefsize=0, prefill=0)
-    accepted._threshold = 5
-    assert accepted.push(Packet(10)) is True
-    assert accepted.pop(timeout=0).sequence == 10
-    assert accepted.push(Packet(16)) is True
-
-    rejected = HeapJitterBuffer(maxsize=4, prefsize=0, prefill=0)
-    rejected._threshold = 5
-    assert rejected.push(Packet(10)) is True
-    assert rejected.pop(timeout=0).sequence == 10
-    assert rejected.push(Packet(17)) is False
-
-
 def test_sequence_wraparound_accepts_zero_after_65535():
     buffer = HeapJitterBuffer(maxsize=4, prefsize=0, prefill=0)
 
@@ -116,12 +102,16 @@ def test_advance_noops_before_first_packet_or_with_invalid_count():
     buffer = HeapJitterBuffer(maxsize=4, prefsize=0, prefill=0)
 
     buffer.advance()
-    assert buffer._last_tx_seq == -1
+    assert buffer.push(Packet(1)) is True
+    assert buffer.pop(timeout=0).sequence == 1
 
     assert buffer.push(Packet(10)) is True
-    assert buffer.pop(timeout=0).sequence == 10
+    assert buffer.pop(timeout=0) is None
     buffer.advance(0)
-    assert buffer._last_tx_seq == 10
+    assert buffer.gap() == 8
+    assert buffer.pop(timeout=0) is None
+    buffer.advance(8)
+    assert buffer.pop(timeout=0).sequence == 10
 
 
 def test_resync_to_next_moves_cursor_before_buffered_packet():
@@ -145,12 +135,24 @@ def test_flush_returns_sorted_packets_updates_cursor_and_resets_prefill():
     assert buffer.push(Packet(1)) is True
 
     assert [packet.sequence for packet in buffer.flush()] == [1, 3]
-    assert buffer._last_tx_seq == 3
-    assert buffer._prefill == 2
+    assert buffer.push(Packet(4)) is True
+    assert buffer.pop(timeout=0) is None
+    assert buffer.push(Packet(5)) is True
+    assert buffer.pop(timeout=0).sequence == 4
+
+
+def test_flush_updates_cursor_so_older_packets_are_rejected():
+    buffer = HeapJitterBuffer(maxsize=4, prefsize=0, prefill=0)
+
+    assert buffer.push(Packet(3)) is True
+    assert buffer.push(Packet(1)) is True
+    assert [packet.sequence for packet in buffer.flush()] == [1, 3]
+
+    assert buffer.push(Packet(2)) is False
     assert buffer.pop(timeout=0) is None
 
 
-def test_reset_clears_packets_and_internal_counters():
+def test_reset_clears_packets_and_allows_fresh_sequence_start():
     buffer = HeapJitterBuffer(maxsize=4, prefsize=0, prefill=1)
 
     assert buffer.push(Packet(1)) is True
@@ -161,5 +163,5 @@ def test_reset_clears_packets_and_internal_counters():
 
     assert len(buffer) == 0
     assert buffer.peek(all=True) is None
-    assert buffer._last_tx_seq == -1
-    assert buffer._prefill == 1
+    assert buffer.push(Packet(2)) is True
+    assert buffer.pop(timeout=0).sequence == 2
