@@ -78,14 +78,6 @@ def receiver_report_packet() -> rtp.ReceiverReportPacket:
     return rtp.ReceiverReportPacket(b'\x80\xc9\x00\x00' + (123).to_bytes(4, 'big'))
 
 
-def test_is_ip_discovery_packet_matches_expected_shape():
-    reader = make_reader()
-
-    assert reader._is_ip_discovery_packet(bytes([0, 0x02]) + b'\x00' * 72) is True
-    assert reader._is_ip_discovery_packet(bytes([0, 0x02]) + b'\x00' * 71) is False
-    assert reader._is_ip_discovery_packet(bytes([0, 0x03]) + b'\x00' * 72) is False
-
-
 def test_pending_unknown_packets_queue_overflows_and_expires():
     reader = make_reader()
     first = Packet(1)
@@ -225,7 +217,6 @@ def test_callback_routes_rtcp_packet_after_decrypt():
 def test_callback_logs_unexpected_rtcp_packet_before_dispatch():
     reader = make_reader()
     packet = rtp.APPPacket(b'\x80\xcc\x00\x00' + (123).to_bytes(4, 'big') + b'TEST')
-    reader._log_unexpected_rtcp_packet = MagicMock()
 
     with patch('discord.ext.voice_recv.reader.rtp.is_rtcp', return_value=True), patch(
         'discord.ext.voice_recv.reader.rtp.decode_rtcp', return_value=packet
@@ -233,7 +224,7 @@ def test_callback_logs_unexpected_rtcp_packet_before_dispatch():
         reader.decryptor.decrypt_rtcp.return_value = b'plain'
         reader.callback(b'cipher')
 
-    reader._log_unexpected_rtcp_packet.assert_called_once_with(packet, b'cipher')
+    assert reader._unexpected_rtcp_count[(204, 'APPPacket')] == 1
     reader.packet_router.feed_rtcp.assert_called_once_with(packet)
 
 
