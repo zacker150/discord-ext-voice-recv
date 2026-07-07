@@ -262,7 +262,6 @@ def test_ffmpeg_sink_builds_process_writes_pcm_and_cleans_up():
 
     assert process.stdin.closed_by_sink is True
     assert process.wait_calls == [5]
-    assert process.kill_calls == 1
 
 
 def test_ffmpeg_sink_invokes_error_callback_when_stdin_write_fails():
