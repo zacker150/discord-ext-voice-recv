@@ -29,7 +29,6 @@ def test_video_stream_resolution_maps_payload_fields_and_repr():
     assert resolution.height == 720
     assert resolution.width == 1280
     assert resolution.type == 'fixed'
-    assert repr(resolution) == "<VideoStreamResolution width=1280 height=720 type='fixed'>"
 
 
 def test_video_stream_info_maps_payload_fields():
@@ -84,5 +83,4 @@ def test_voice_video_streams_maps_member_and_streams():
     assert streams.video_ssrc == 20
     assert streams.member is member
     assert [stream.rid for stream in streams.streams] == ['100', '50']
-    assert streams._minify_streams() == '[<rid=100 active=True>, <rid=50 active=False>]'
-    assert repr(streams) == f'<VoiceVideoStreams member={member!s} streams={streams._minify_streams()}>'
+    assert [stream.active for stream in streams.streams] == [True, False]

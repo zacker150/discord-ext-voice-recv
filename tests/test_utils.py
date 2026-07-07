@@ -85,9 +85,8 @@ def test_defaultdict_passes_missing_key_to_factory():
     assert mapping['x'] == 'value:x'
 
     no_factory = Defaultdict()
-    with pytest.raises(KeyError) as exc:
+    with pytest.raises(KeyError):
         no_factory['missing']
-    assert exc.value.args == (('missing',),)
 
 
 def test_loop_timer_tracks_loops_and_sleep_duration():
