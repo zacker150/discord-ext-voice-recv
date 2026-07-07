@@ -237,17 +237,18 @@ class AudioSink(SinkABC):
 class MultiAudioSink(AudioSink):
     def __init__(self, destinations: Sequence[AudioSink], /):
         # Intentionally not calling super().__init__ here
+        self._children: List[AudioSink] = []
+
         if destinations is not None:
             for dest in destinations:
                 self._register_child(dest)
-
-        self._children: List[AudioSink] = list(destinations)
 
     def _register_child(self, child: AudioSink) -> None:
         if child in self.root.walk_children():
             raise RuntimeError('Sink is already registered.')
 
         child._parent = self
+        self._children.append(child)
 
     @property
     def child(self) -> Optional[AudioSink]:
