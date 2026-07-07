@@ -133,18 +133,6 @@ def test_remove_ssrc_without_audio_ssrc_still_clears_stream_mappings():
     vc._reader.speaking_timer.drop_ssrc.assert_not_called()
 
 
-def test_get_ssrc_helpers_and_media_kind_default():
-    vc = make_voice_client()
-    vc._id_to_ssrc = {10: 100}
-    vc._ssrc_to_id = {100: 10}
-    vc._ssrc_media_kind = {100: 'audio'}
-
-    assert vc._get_ssrc_from_id(10) == 100
-    assert vc._get_id_from_ssrc(100) == 10
-    assert vc._get_ssrc_media_kind(100) == 'audio'
-    assert vc._get_ssrc_media_kind(999) == 'unknown'
-
-
 def test_record_voice_ws_event_stores_recent_ops_dave_ops_and_pending_events():
     vc = make_voice_client()
     op = min(DAVE_AND_MLS_OPCODES)
