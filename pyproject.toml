@@ -84,7 +84,19 @@ reportUnnecessaryTypeIgnoreComment = "warning"
 pythonVersion = "3.10"
 typeCheckingMode = "basic"
 
+[tool.coverage.run]
+branch = true
+relative_files = true
+source = [
+    "discord/ext/voice_recv",
+]
+
+[tool.coverage.report]
+show_missing = true
+skip_covered = true
+
 [dependency-groups]
 dev = [
     "pytest>=9.1.1",
+    "pytest-cov>=7.1.0",
 ]

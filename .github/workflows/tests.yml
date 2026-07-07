@@ -13,6 +13,9 @@ jobs:
   unit:
     name: Unit tests (Python ${{ matrix.python-version }})
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
 
     strategy:
       fail-fast: false
@@ -46,7 +49,46 @@ jobs:
         uses: pavelzw/pytest-action@v2
         with:
           custom-pytest: uv run --frozen pytest
-          custom-arguments: -q
+          custom-arguments: -q --cov --cov-report=term-missing:skip-covered --cov-report=html
           emoji: false
           job-summary: false
           verbose: false
+
+      - name: Upload HTML coverage report
+        if: matrix.python-version == '3.14'
+        uses: actions/upload-artifact@v7
+        with:
+          name: html-coverage-report
+          path: htmlcov/
+
+      - name: Upload GitHub Pages coverage report
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main' && matrix.python-version == '3.14'
+        uses: actions/upload-pages-artifact@v4
+        with:
+          path: htmlcov/
+
+      - name: Comment coverage
+        if: matrix.python-version == '3.14'
+        uses: py-cov-action/python-coverage-comment-action@v4.1
+        with:
+          GITHUB_TOKEN: ${{ github.token }}
+          activity: ${{ github.event_name == 'push' && 'save_coverage_data_files' || 'process_pr' }}
+          ANNOTATE_MISSING_LINES: true
+          USE_GH_PAGES_HTML_URL: true
+
+  coverage-pages:
+    name: Deploy coverage report to GitHub Pages
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: unit
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+
+    steps:
+      - name: Deploy coverage report
+        id: deployment
+        uses: actions/deploy-pages@v4
