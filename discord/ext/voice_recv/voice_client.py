@@ -15,6 +15,7 @@ from discord.utils import MISSING
 from typing import TYPE_CHECKING
 
 from .gateway import hook, binary_hook, DAVE_AND_MLS_OPCODES
+from .dave import DaveBridge
 from .reader import AudioReader
 from .sinks import AudioSink
 
@@ -58,7 +59,9 @@ class VoiceRecvClient(discord.VoiceClient):
                 'Voice receive requires the zacker150/discord.py fork with binary_hook support. '
                 'Install https://github.com/zacker150/discord.py (release branch).'
             )
-        return VoiceConnectionState(self, hook=hook, binary_hook=binary_hook)
+        state = VoiceConnectionState(self, hook=hook, binary_hook=binary_hook)
+        self._dave_bridge = DaveBridge(state)
+        return state
 
     async def on_voice_state_update(self, data) -> None:
         old_channel_id = self.channel.id if self.channel else None

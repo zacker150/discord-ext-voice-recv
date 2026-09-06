@@ -258,3 +258,18 @@ of another application. Updating the fork requires changing this pin and the loc
 
 Connections fail with an actionable error if the installed library lacks
 `binary_hook`; the extension no longer patches the global voice WebSocket class.
+
+### DAVE receive session access
+
+Audio decryption uses a per-connection `DaveBridge` and the fork's shared
+`dave_lock`, so it cannot overlap an MLS session update. The bridge reads the
+current session on each attempt, including after session replacement, and exposes
+an immutable snapshot of readiness, protocol version, epoch, session status,
+pending transition IDs, and the monotonic time of the last observed epoch change.
+
+Missing or unready sessions return `session_not_ready`; missing participant keys
+return `no_decryptor`; borrow conflicts return `busy`; other invalid ciphertext
+returns `decrypt_error`. These outcomes use the existing bounded retry queue.
+The bridge requires `davey>=0.1.6,<0.2` because error classification depends on its
+exception contract. Queue-policy changes and lifecycle event dispatch are separate
+from this session-access change.

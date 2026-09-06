@@ -537,9 +537,10 @@ wheels = [
 
 [[package]]
 name = "discord-ext-voice-recv"
-version = "0.5.3a192"
+version = "0.5.3a193"
 source = { editable = "." }
 dependencies = [
+    { name = "davey" },
     { name = "discord-py", extra = ["voice"] },
 ]
 
@@ -563,6 +564,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
+    { name = "davey", specifier = ">=0.1.6,<0.2" },
     { name = "discord-py", extras = ["voice"], git = "https://github.com/zacker150/discord.py?rev=8e15043046e8bef91dd197c779fb1baf4c427387" },
     { name = "pyaudio", marker = "extra == 'extras'", specifier = ">=0.2.14" },
     { name = "pyaudio", marker = "extra == 'extras-local'", specifier = ">=0.2.14" },

@@ -3,7 +3,13 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Optional
+import time
+from typing import Optional, TYPE_CHECKING
+
+import davey
+
+if TYPE_CHECKING:
+    from discord.voice_state import VoiceConnectionState
 
 __all__ = (
     'DaveSupplemental',
@@ -11,6 +17,70 @@ __all__ = (
 )
 
 _DAVE_MARKER = b'\xfa\xfa'
+
+
+@dataclass(frozen=True)
+class DaveState:
+    """An immutable observation of the fork's session under its shared lock."""
+
+    protocol_version: int
+    epoch: Optional[int]
+    status: Optional[davey.SessionStatus]
+    pending_transition_ids: frozenset[int]
+    # Time this bridge observed an epoch change or session replacement.
+    last_epoch_change: Optional[float]
+    ready: bool
+
+
+class DaveBridge:
+    """Own extension-side session access; never decrypt through a cached session.
+
+    The connection owns the session and may replace it during recovery. Both
+    metadata reads and audio decryption use its lock, shared with MLS updates.
+    State is refreshed on demand; lifecycle notifications are handled separately.
+    """
+
+    def __init__(self, connection: VoiceConnectionState):
+        self._connection = connection
+        self.lock = connection.dave_lock
+        self._session: Optional[davey.DaveSession] = None
+        self._state = DaveState(0, None, None, frozenset(), None, False)
+
+    def _refresh_locked(self) -> DaveState:
+        session = self._connection.dave_session
+        version = self._connection.dave_protocol_version
+        epoch = session.epoch if session is not None else None
+        changed_at = self._state.last_epoch_change
+        if session is not self._session or epoch != self._state.epoch:
+            changed_at = time.monotonic()
+        self._session = session
+        self._state = DaveState(
+            protocol_version=version,
+            epoch=epoch,
+            status=session.status if session is not None else None,
+            pending_transition_ids=frozenset(self._connection.dave_pending_transitions),
+            last_epoch_change=changed_at,
+            ready=version > 0 and session is not None and session.ready,
+        )
+        return self._state
+
+    def snapshot(self) -> DaveState:
+        with self.lock:
+            return self._refresh_locked()
+
+    def decrypt_audio(self, user_id: int, payload: bytes) -> tuple[Optional[bytes], str]:
+        try:
+            with self.lock:
+                state = self._refresh_locked()
+                if not state.ready:
+                    return None, 'session_not_ready'
+                session = self._connection.dave_session
+                assert session is not None
+                return bytes(session.decrypt(user_id, davey.MediaType.audio, payload)), 'ok'
+        except RuntimeError:
+            return None, 'busy'
+        except ValueError as exc:
+            return None, 'no_decryptor' if 'NoDecryptorForUser' in str(exc) else 'decrypt_error'
 
 
 @dataclass(frozen=True)
