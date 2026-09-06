@@ -19,6 +19,52 @@ Installation automatically includes the required `discord.py` fork with voice
 support, pinned to a tested commit in package metadata. No separate fork install
 or uv source override is needed. This fork is distributed through GitHub, not PyPI.
 
+## End-to-end encryption (DAVE)
+
+The GitHub installation above selects the required discord.py fork automatically.
+The fork performs the MLS handshake and encrypts outgoing Opus; this extension
+decrypts received audio under the same session lock. Python 3.10–3.14 is supported.
+
+`VoiceRecvClient` inherits `dave_protocol_version`, `dave_ready`, `dave_epoch`, and
+`voice_privacy_code`. `dave_ready` means an encrypted group is ready, so it is false
+for protocol-zero stage sessions. Wait for readiness before playing encrypted TTS.
+`dave_member_ids()` returns sorted integer MLS member IDs (including the bot when
+present). `get_dave_verification_code(member_or_id)` returns the pairwise code,
+or `None` when not ready; an unknown participant can raise `ValueError`.
+
+Register async handlers with `client.event` or `voice_client.add_listener`, or
+synchronous sink handlers with `AudioSink.listener`. Handler names and arguments:
+
+| Handler | Arguments |
+| --- | --- |
+| `on_voice_dave_protocol_version` | `version: int` |
+| `on_voice_dave_prepare_transition` | `transition_id: int, protocol_version: int` |
+| `on_voice_dave_execute_transition` | `transition_id: int, protocol_version: int` |
+| `on_voice_dave_prepare_epoch` | `epoch: int, protocol_version: int` |
+| `on_voice_dave_epoch_changed` | `epoch: int \u007c None` |
+| `on_voice_dave_ready` | `ready: bool` |
+| `on_voice_dave_downgraded` | no arguments |
+| `on_voice_dave_opcode` | `op: int, data: dict` (binary: `seq` and `payload` bytes) |
+
+State events describe changes; repeated gateway frames do not repeat readiness
+events. A new group can emit the same epoch number. Ordinary rekeys preserve
+queued ciphertext for up to 10 seconds; a group reset discards it immediately.
+
+`get_recv_diagnostics()` includes a JSON-serializable `dave_session` block even
+before listening: status, epoch, readiness, protocol version, group generation,
+member count, pending transition IDs, and seconds since the last observed epoch
+change. While listening, `decryption_stats` maps audio SSRC strings to native
+per-user totals: successes, failures, attempts, passthroughs, and duration in
+microseconds. These are fresh snapshots, not cached totals; SSRCs belonging to
+the same user share that user's totals.
+
+Useful receive counters include `dave_inner_decrypt_ok`, `dave_plaintext_rejected`,
+`dave_inner_defer_drop_expired`, `dave_inner_defer_drop_overflow`, and
+`dave_inner_defer_drop_session_reset`. Inspect RTP counts before attributing
+silence to decryption. Video/screen SSRCs are currently counted but not decoded
+or delivered as media. Privacy codes identify the group; compare participant
+verification codes through a trusted channel when identity verification matters.
+
 ## Development
 This project uses `uv` for dependency management and builds.
 

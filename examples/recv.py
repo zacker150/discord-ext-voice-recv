@@ -150,15 +150,14 @@ class ReceiveTraffic(commands.Cog):
             ws_tail = ",".join(str(op) for op in ws_recent[-5:])
 
         return (
-            f"strip_ok={diag.get('dave_strip_success', 0)} "
+            f"dave_session={diag.get('dave_session', {})} "
             f"parse_fail={diag.get('dave_parse_fail', 0)} "
             f"ranges_nonzero={diag.get('dave_ranges_nonzero', 0)} "
             f"inner_needed={diag.get('dave_needs_inner_decrypt_packets', 0)} "
             f"inner_ok={diag.get('dave_inner_decrypt_ok', 0)} "
             f"inner_err={diag.get('dave_inner_decrypt_err', 0)} "
-            f"inner_no_session={diag.get('dave_inner_decrypt_no_session', 0)} "
+            f"inner_not_ready={diag.get('dave_inner_decrypt_session_not_ready', 0)} "
             f"inner_no_uid={diag.get('dave_inner_decrypt_no_user_id', 0)} "
-            f"inner_no_davey={diag.get('dave_inner_decrypt_no_davey', 0)} "
             f"inner_skipped={diag.get('dave_inner_decode_skipped', 0)} "
             f"nonce_gap={diag.get('dave_nonce_gap_events', 0)} "
             f"nonce_rewind={diag.get('dave_nonce_rewind_events', 0)} "

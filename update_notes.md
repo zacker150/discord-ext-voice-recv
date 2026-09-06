@@ -1,6 +1,12 @@
 # Update notes
 Notably, not a changelog, just notes.
 
+## 0.5.3a196
+- Add MLS membership and member verification-code helpers, session diagnostics,
+  and fresh native per-user decryption statistics keyed by audio SSRC.
+- Document DAVE events, readiness, installation, counters, and video limitations.
+- Includes a195 lifecycle events and generation-based old-group retry resets.
+
 ## 0.5.2
 - Adds `extras.localplayback` module
 - Adds info about the extras modules to the readme

@@ -100,6 +100,40 @@ class DaveBridge:
         except ValueError as exc:
             return None, 'no_decryptor' if 'NoDecryptorForUser' in str(exc) else 'decrypt_error'
 
+    def member_ids(self) -> tuple[int, ...]:
+        """Return current MLS membership, not the voice-channel cache."""
+        with self.lock:
+            session = self._connection.dave_session
+            return tuple(sorted(int(uid) for uid in session.get_user_ids())) if session is not None else ()
+
+    def diagnostics(self, audio_ssrcs: dict[int, int]) -> dict:
+        """Copy native diagnostics under the lock; never retain native stats objects."""
+        with self.lock:
+            state = self._refresh_locked()
+            session = self._connection.dave_session
+            members = self.member_ids()
+            decryptions = {}
+            if session is not None:
+                for ssrc, uid in audio_ssrcs.items():
+                    stats = session.get_decryption_stats(uid, davey.MediaType.audio)
+                    if stats is not None:
+                        decryptions[str(ssrc)] = {
+                            'user_id': uid,
+                            **{name: int(getattr(stats, name)) for name in
+                               ('successes', 'failures', 'duration', 'attempts', 'passthroughs')},
+                        }
+            return {
+                'status': str(state.status).rsplit('.', 1)[-1] if state.status is not None else None,
+                'epoch': state.epoch, 'ready': state.ready,
+                'protocol_version': state.protocol_version,
+                'generation': state.generation,
+                'member_count': len(members),
+                'pending_transitions': sorted(state.pending_transition_ids),
+                'seconds_since_epoch_change': (max(0.0, time.monotonic() - state.last_epoch_change)
+                                              if state.last_epoch_change is not None else None),
+                'decryption_stats': decryptions,
+            }
+
 
 @dataclass(frozen=True)
 class DaveSupplemental:

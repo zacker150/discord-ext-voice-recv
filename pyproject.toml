@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "discord-ext-voice-recv"
-version = "0.5.3a195"
+version = "0.5.3a196"
 description = "Experimental voice receive extension for discord.py"
 readme = "README.md"
 requires-python = ">=3.10"
