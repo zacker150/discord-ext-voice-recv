@@ -537,7 +537,7 @@ wheels = [
 
 [[package]]
 name = "discord-ext-voice-recv"
-version = "0.5.3a191"
+version = "0.5.3a192"
 source = { editable = "." }
 dependencies = [
     { name = "discord-py", extra = ["voice"] },
