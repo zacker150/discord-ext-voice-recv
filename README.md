@@ -1,5 +1,3 @@
-![PyPI - Version](https://img.shields.io/pypi/v/discord-ext-voice-recv?color=dodgerblue&link=https%3A%2F%2Fpypi.org%2Fproject%2Fdiscord-ext-voice-recv%2F)
-
 # discord-ext-voice-recv
 Voice receive extension package for discord.py
 
@@ -11,16 +9,15 @@ See the [update notes](update_notes.md) for a poor excuse for a changelog.
 ## Installing
 **Python 3.10 or higher is required**, preferably at least 3.11 or whatever is latest
 
-```
-python -m pip install discord-ext-voice-recv
+Install this fork from GitHub (Git must be installed):
+
+```sh
+python -m pip install git+https://github.com/zacker150/discord-ext-voice-recv
 ```
 
-To install directly from github:
-```
-python -m pip install git+https://github.com/imayhaveborkedit/discord-ext-voice-recv
-```
-
-Naturally, this extension depends on `discord.py` being installed with voice support (`pynacl`).
+Installation automatically includes the required `discord.py` fork with voice
+support, pinned to a tested commit in package metadata. No separate fork install
+or uv source override is needed. This fork is distributed through GitHub, not PyPI.
 
 ## Development
 This project uses `uv` for dependency management and builds.
@@ -254,17 +251,10 @@ Helper sinks for playing audio through an audio output device the local system. 
 ## Discord.py fork requirement
 
 Voice receive requires the native `binary_hook` API from
-[zacker150/discord.py](https://github.com/zacker150/discord.py). `uv sync`
-in this repository selects its `release` branch using the development lockfile.
-For pip installations, install the fork explicitly:
+[zacker150/discord.py](https://github.com/zacker150/discord.py). The package's direct
+Git dependency pins commit `8e15043046e8bef91dd197c779fb1baf4c427387`, so pip and uv
+install the tested fork automatically, including when this extension is a dependency
+of another application. Updating the fork requires changing this pin and the lockfile.
 
-```sh
-pip install "discord.py[voice] @ git+https://github.com/zacker150/discord.py@release"
-pip install .
-```
-
-Application consumers must declare their own source override: uv sources are
-not inherited from dependencies. Production Ducky rollout will pin an immutable
-fork release tag. Connections fail with an actionable error if the installed
-library lacks `binary_hook`; the extension no longer patches the global voice
-WebSocket class.
+Connections fail with an actionable error if the installed library lacks
+`binary_hook`; the extension no longer patches the global voice WebSocket class.
