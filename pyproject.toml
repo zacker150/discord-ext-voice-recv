@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "discord-ext-voice-recv"
-version = "0.5.3a191"
+version = "0.5.3a192"
 description = "Experimental voice receive extension for discord.py"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -29,7 +29,7 @@ classifiers = [
     "Topic :: Multimedia :: Sound/Audio :: Capture/Recording",
 ]
 dependencies = [
-    "discord.py[voice]>=2.7.1",
+    "discord.py[voice] @ git+https://github.com/zacker150/discord.py@8e15043046e8bef91dd197c779fb1baf4c427387",
 ]
 
 [project.optional-dependencies]
