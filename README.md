@@ -250,3 +250,21 @@ Helper sinks for playing audio through an audio output device the local system. 
 - Muxer AudioSink (mixes multiple audio streams into a single stream)
 - Rust implementations of some components for improved performance
 - Alternative voice client implementation with a minimal interface intended for use with external data processing
+
+## Discord.py fork requirement
+
+Voice receive requires the native `binary_hook` API from
+[zacker150/discord.py](https://github.com/zacker150/discord.py). `uv sync`
+in this repository selects its `release` branch using the development lockfile.
+For pip installations, install the fork explicitly:
+
+```sh
+pip install "discord.py[voice] @ git+https://github.com/zacker150/discord.py@release"
+pip install .
+```
+
+Application consumers must declare their own source override: uv sources are
+not inherited from dependencies. Production Ducky rollout will pin an immutable
+fork release tag. Connections fail with an actionable error if the installed
+library lacks `binary_hook`; the extension no longer patches the global voice
+WebSocket class.

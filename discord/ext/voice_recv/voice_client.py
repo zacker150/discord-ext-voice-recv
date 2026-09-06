@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import inspect
 import time
 import asyncio
 import logging
@@ -13,7 +14,7 @@ from discord.utils import MISSING
 
 from typing import TYPE_CHECKING
 
-from .gateway import hook, install_binary_ws_hook, DAVE_AND_MLS_OPCODES
+from .gateway import hook, binary_hook, DAVE_AND_MLS_OPCODES
 from .reader import AudioReader
 from .sinks import AudioSink
 
@@ -52,8 +53,12 @@ class VoiceRecvClient(discord.VoiceClient):
         self._dave_ws_last_payloads: Dict[int, Dict[str, Any]] = {}
 
     def create_connection_state(self) -> VoiceConnectionState:
-        install_binary_ws_hook()
-        return VoiceConnectionState(self, hook=hook)
+        if 'binary_hook' not in inspect.signature(VoiceConnectionState.__init__).parameters:
+            raise RuntimeError(
+                'Voice receive requires the zacker150/discord.py fork with binary_hook support. '
+                'Install https://github.com/zacker150/discord.py (release branch).'
+            )
+        return VoiceConnectionState(self, hook=hook, binary_hook=binary_hook)
 
     async def on_voice_state_update(self, data) -> None:
         old_channel_id = self.channel.id if self.channel else None
