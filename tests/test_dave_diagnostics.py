@@ -1,4 +1,5 @@
 import json
+import davey
 from types import SimpleNamespace
 from unittest.mock import patch
 
@@ -51,3 +52,11 @@ def test_client_verification_accepts_id_and_member():
         get.assert_called_with(42)
         assert client.get_dave_verification_code(SimpleNamespace(id=43)) == '123'
         get.assert_called_with(43)
+
+
+def test_native_missing_decryptor_does_not_break_diagnostics(bridge_state):
+    bridge, state = bridge_state
+    state.dave_session = davey.DaveSession(1, 42, 999)
+    snapshot = bridge.diagnostics({100: 99})
+    assert snapshot['decryption_stats'] == {}
+    json.dumps(snapshot)

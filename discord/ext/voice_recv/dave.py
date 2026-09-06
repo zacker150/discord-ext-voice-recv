@@ -115,7 +115,12 @@ class DaveBridge:
             decryptions = {}
             if session is not None:
                 for ssrc, uid in audio_ssrcs.items():
-                    stats = session.get_decryption_stats(uid, davey.MediaType.audio)
+                    try:
+                        stats = session.get_decryption_stats(uid, davey.MediaType.audio)
+                    except ValueError as exc:
+                        if 'NoDecryptorForUser' not in str(exc):
+                            raise
+                        continue
                     if stats is not None:
                         decryptions[str(ssrc)] = {
                             'user_id': uid,
