@@ -42,6 +42,11 @@ DAVE_AND_MLS_OPCODES = frozenset(
 async def binary_hook(ws: DiscordVoiceWebSocket, op: int, seq: int, payload: bytes) -> None:
     vc: VoiceRecvClient = ws._connection.voice_client  # type: ignore
     vc._update_voice_ws_binary_state(op, payload, seq=seq, raw_len=len(payload) + 3)
+    duration = getattr(ws, 'dave_mls_processing_ms', None)
+    if op in (DiscordVoiceWebSocket.MLS_ANNOUNCE_COMMIT_TRANSITION, DiscordVoiceWebSocket.MLS_WELCOME) and duration is not None:
+        log.debug('DAVE MLS processing: op=%s seq=%s duration_ms=%.3f', op, seq, duration)
+        if duration > 20:
+            log.warning('Slow DAVE MLS processing: op=%s duration_ms=%.3f', op, duration)
 
 
 async def hook(self: DiscordVoiceWebSocket, msg: Dict[str, Any]):
@@ -59,6 +64,7 @@ async def hook(self: DiscordVoiceWebSocket, msg: Dict[str, Any]):
             log.info("WS payload has extra keys: %s", m)
 
     vc._update_voice_ws_state(op, data, raw_message=msg)
+    vc._dave_state_changed(f'json_op_{op}')
 
     if op == self.READY:
         vc._add_ssrc(vc.guild.me.id, data['ssrc'])

@@ -252,7 +252,7 @@ Helper sinks for playing audio through an audio output device the local system. 
 
 Voice receive requires the native `binary_hook` API from
 [zacker150/discord.py](https://github.com/zacker150/discord.py). The package's direct
-Git dependency pins commit `8e15043046e8bef91dd197c779fb1baf4c427387`, so pip and uv
+Git dependency pins commit `40c84ddc82e06c05fe9f4aef6c4739912e429ed9`, so pip and uv
 install the tested fork automatically, including when this extension is a dependency
 of another application. Updating the fork requires changing this pin and the lockfile.
 
@@ -269,7 +269,23 @@ pending transition IDs, and the monotonic time of the last observed epoch change
 
 Missing or unready sessions return `session_not_ready`; missing participant keys
 return `no_decryptor`; borrow conflicts return `busy`; other invalid ciphertext
-returns `decrypt_error`. These outcomes use the existing bounded retry queue.
+returns `decrypt_error`. Retryable outcomes use an age-bounded queue: 10 seconds normally, or 15 seconds
+for packets queued within five seconds of an initial epoch preparation. Each
+SSRC is capped at 1,024 packets; overflow drops the oldest packet.
 The bridge requires `davey>=0.1.6,<0.2` because error classification depends on its
-exception contract. Queue-policy changes and lifecycle event dispatch are separate
-from this session-access change.
+exception contract. Retries run on new packets, gateway state notifications, and a 100 ms timer.
+Recovered packets retain sequence order within each SSRC, including sequence
+rollover, and an unresolved speaker does not block other speakers. Ordinary epoch
+changes clear nonce/sequence diagnostics while keeping queued ciphertext.
+
+For encrypted sessions, the supplemental parser contributes diagnostics but does
+not decide whether a packet reaches DAVE decryption. Once the session is ready,
+unmarked plaintext is rejected unless a downgrade is pending or has executed.
+Protocol-zero plaintext remains supported. Opus decoder guards remain a final
+check against forwarding unresolved ciphertext. Broader lifecycle event dispatch
+and new-group queue resets are separate follow-up work.
+
+The binary hook logs the fork's measured `process_commit` / `process_welcome`
+duration and warns above 20 ms. These timings exclude lock acquisition, network
+acknowledgement, and extension callbacks; sustained slow processing warrants a
+separate jitter-buffer adjustment.

@@ -48,15 +48,15 @@ class CheckedSession:
 def bridge_state():
     lock = threading.RLock()
     state = SimpleNamespace(dave_lock=lock, dave_session=CheckedSession(lock),
-                            dave_protocol_version=1, dave_pending_transitions={})
+                            dave_protocol_version=1, dave_pending_transitions={}, dave_downgraded=False)
     return DaveBridge(state), state
 
 
 def test_decrypt_holds_shared_lock_for_metadata_and_audio(bridge_state):
     bridge, state = bridge_state
     assert bridge.lock is state.dave_lock
-    assert bridge.decrypt_audio(42, b'cipher') == (b'opus', 'ok')
-    assert state.dave_session.calls == [(42, davey.MediaType.audio, b'cipher')]
+    assert bridge.decrypt_audio(42, b'cipher\xfa\xfa') == (b'opus', 'ok')
+    assert state.dave_session.calls == [(42, davey.MediaType.audio, b'cipher\xfa\xfa')]
 
 
 @pytest.mark.parametrize('condition', ['missing', 'not_ready', 'version_zero'])
@@ -69,7 +69,7 @@ def test_unavailable_session_never_attempts_decryption(bridge_state, condition):
         session.is_ready = False
     else:
         state.dave_protocol_version = 0
-    assert bridge.decrypt_audio(42, b'cipher') == (None, 'session_not_ready')
+    assert bridge.decrypt_audio(42, b'cipher\xfa\xfa') == (None, 'session_not_ready')
     assert not session.calls
     assert not bridge.snapshot().ready
 
@@ -82,18 +82,18 @@ def test_unavailable_session_never_attempts_decryption(bridge_state, condition):
 def test_error_classification_and_lock_release(bridge_state, error, reason):
     bridge, state = bridge_state
     state.dave_session.error = error
-    assert bridge.decrypt_audio(42, b'cipher') == (None, reason)
+    assert bridge.decrypt_audio(42, b'cipher\xfa\xfa') == (None, reason)
     assert not state.dave_lock._is_owned()
     assert PacketDecryptor._is_retryable_inner_reason(reason)
     state.dave_session.error = None
-    assert bridge.decrypt_audio(42, b'cipher') == (b'opus', 'ok')
+    assert bridge.decrypt_audio(42, b'cipher\xfa\xfa') == (b'opus', 'ok')
 
 
 def test_unexpected_programming_error_is_not_reported_as_retryable(bridge_state):
     bridge, state = bridge_state
     state.dave_session.error = TypeError('bad API usage')
     with pytest.raises(TypeError):
-        bridge.decrypt_audio(42, b'cipher')
+        bridge.decrypt_audio(42, b'cipher\xfa\xfa')
     assert not state.dave_lock._is_owned()
 
 
@@ -113,7 +113,7 @@ def test_snapshot_tracks_epoch_session_replacement_and_disconnect(bridge_state):
         state.dave_session = CheckedSession(state.dave_lock)
         state.dave_session.current_epoch = 2
         assert bridge.snapshot().last_epoch_change == 30
-        assert bridge.decrypt_audio(42, b'cipher') == (b'opus', 'ok')
+        assert bridge.decrypt_audio(42, b'cipher\xfa\xfa') == (b'opus', 'ok')
         assert not old.calls
         state.dave_session = None
         state.dave_protocol_version = 0
@@ -128,7 +128,7 @@ def test_waiting_decrypt_uses_replacement_session(bridge_state):
     entered = threading.Event()
     def decrypt():
         entered.set()
-        return bridge.decrypt_audio(42, b'cipher')
+        return bridge.decrypt_audio(42, b'cipher\xfa\xfa')
     with ThreadPoolExecutor(max_workers=1) as pool:
         with state.dave_lock:
             old = state.dave_session
@@ -144,7 +144,7 @@ def test_waiting_decrypt_uses_replacement_session(bridge_state):
 def test_real_davey_missing_decryptor_error_contract():
     session = davey.DaveSession(1, 1, 2)
     with pytest.raises(ValueError, match='NoDecryptorForUser'):
-        session.decrypt(3, davey.MediaType.audio, b'cipher')
+        session.decrypt(3, davey.MediaType.audio, b'cipher\xfa\xfa')
 
 
 @pytest.mark.parametrize('reason', ['ok', 'no_decryptor', 'busy', 'session_not_ready', 'decrypt_error'])
@@ -157,8 +157,24 @@ def test_packet_decryptor_uses_bridge_and_preserves_retry_flags(reason):
         '_voice_recv_needs_dave_inner_decrypt': True,
         '_voice_recv_pending_inner_decrypt': True,
     })
-    result = decryptor._try_dave_inner_decrypt(packet, b'cipher')
+    result = decryptor._try_dave_inner_decrypt(packet, b'cipher\xfa\xfa')
     assert result == bridge.decrypt_audio.return_value
-    bridge.decrypt_audio.assert_called_once_with(42, b'cipher')
+    bridge.decrypt_audio.assert_called_once_with(42, b'cipher\xfa\xfa')
     assert packet.extension_data['_voice_recv_needs_dave_inner_decrypt'] == (reason != 'ok')
     assert packet.extension_data['_voice_recv_pending_inner_decrypt'] == (reason != 'ok')
+
+@pytest.mark.parametrize('pending,executed,allowed', [({},False,False), ({7:0},False,True), ({7:1},False,False), ({},True,True)])
+def test_bridge_checks_plaintext_policy_under_session_lock(bridge_state, pending, executed, allowed):
+    bridge,state=bridge_state
+    state.dave_pending_transitions=pending
+    state.dave_downgraded=executed
+    assert bridge.decrypt_audio(42,b'plain') == ((b'opus','ok') if allowed else (None,'plaintext_rejected'))
+    assert bool(state.dave_session.calls) == allowed
+
+
+def test_only_initial_epoch_preparation_opens_grace_window(bridge_state):
+    bridge,state=bridge_state
+    with patch('discord.ext.voice_recv.dave.time.monotonic', return_value=100):
+        bridge.epoch_prepared(1)
+    bridge.epoch_prepared(2)
+    assert bridge.snapshot().epoch_prepared_at == 100

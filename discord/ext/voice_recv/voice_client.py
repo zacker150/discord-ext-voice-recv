@@ -63,6 +63,15 @@ class VoiceRecvClient(discord.VoiceClient):
         self._dave_bridge = DaveBridge(state)
         return state
 
+    def _dave_state_changed(self, reason: str) -> None:
+        reader = getattr(self, '_reader', None)
+        if reader:
+            reader.wake_dave_retry()
+
+    def on_dave_epoch_prepared(self, epoch: int, protocol_version: int) -> None:
+        self._dave_bridge.epoch_prepared(epoch)
+        self._dave_state_changed('epoch_prepared')
+
     async def on_voice_state_update(self, data) -> None:
         old_channel_id = self.channel.id if self.channel else None
 
