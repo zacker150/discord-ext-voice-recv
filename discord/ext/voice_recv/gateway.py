@@ -7,6 +7,7 @@ from pprint import pformat
 
 from discord.gateway import DiscordVoiceWebSocket
 from discord.enums import SpeakingState, try_enum
+from discord import StageChannel
 
 from .enums import VoiceFlags, VoicePlatform
 from .video import VoiceVideoStreams
@@ -42,6 +43,7 @@ DAVE_AND_MLS_OPCODES = frozenset(
 async def binary_hook(ws: DiscordVoiceWebSocket, op: int, seq: int, payload: bytes) -> None:
     vc: VoiceRecvClient = ws._connection.voice_client  # type: ignore
     vc._update_voice_ws_binary_state(op, payload, seq=seq, raw_len=len(payload) + 3)
+    vc.dispatch('voice_dave_opcode', op, {'seq': seq, 'payload': payload})
     duration = getattr(ws, 'dave_mls_processing_ms', None)
     if op in (DiscordVoiceWebSocket.MLS_ANNOUNCE_COMMIT_TRANSITION, DiscordVoiceWebSocket.MLS_WELCOME) and duration is not None:
         log.debug('DAVE MLS processing: op=%s seq=%s duration_ms=%.3f', op, seq, duration)
@@ -70,6 +72,8 @@ async def hook(self: DiscordVoiceWebSocket, msg: Dict[str, Any]):
         vc._add_ssrc(vc.guild.me.id, data['ssrc'])
 
     elif op == self.SESSION_DESCRIPTION:
+        if data.get('dave_protocol_version', 0) == 0 and not isinstance(vc.channel, StageChannel):
+            log.warning('Voice session negotiated DAVE protocol 0 outside a stage channel')
         if vc._reader:
             # TODO: remove bytes cast once type is fixed in dpy
             vc._reader.update_secret_key(bytes(self.secret_key))  # type: ignore
@@ -127,6 +131,4 @@ async def hook(self: DiscordVoiceWebSocket, msg: Dict[str, Any]):
         )
 
     elif op in DAVE_AND_MLS_OPCODES:
-        if op == DiscordVoiceWebSocket.DAVE_EXECUTE_TRANSITION and vc._reader:
-            vc._reader.analysis_stats.reset_all_dave_nonces()
         vc.dispatch("voice_dave_opcode", op, data)

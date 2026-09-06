@@ -151,6 +151,7 @@ def test_silent_channel_retry_routes_recovered_audio_and_stops(decryptor, wake):
     p=packet()
     decryptor.decrypt_rtp(p)
     reader=object.__new__(AudioReader)
+    reader.voice_client=decryptor._voice_client
     reader.decryptor=decryptor
     reader._receive_lock=threading.RLock()
     reader._retry_wake=threading.Event()

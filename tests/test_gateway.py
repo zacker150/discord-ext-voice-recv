@@ -92,16 +92,13 @@ def test_session_description_updates_active_reader_key(connection, listening):
 
 @pytest.mark.parametrize('op', [21, 22, 24])
 @pytest.mark.parametrize('listening', [False, True])
-def test_only_execute_transition_resets_reader_nonces(connection, op, listening):
+def test_raw_opcodes_do_not_reset_nonces_without_an_epoch_change(connection, op, listening):
     client, ws = connection
     reader = MagicMock()
     client._reader = reader if listening else None
     payload = {'transition_id': 7}
     deliver(ws, op, payload)
-    if listening and op == 22:
-        reader.analysis_stats.reset_all_dave_nonces.assert_called_once_with()
-    else:
-        reader.analysis_stats.reset_all_dave_nonces.assert_not_called()
+    reader.analysis_stats.reset_all_dave_nonces.assert_not_called()
     client.client.dispatch.assert_called_once_with('voice_dave_opcode', op, payload)
 
 
