@@ -1,9 +1,11 @@
 import threading
+from unittest.mock import patch
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 from discord.ext.voice_recv.dave import DaveBridge
 from discord.ext.voice_recv.voice_client import VoiceRecvClient
+from discord.ext.voice_recv.reader import AudioReader
 from test_dave_retry import decryptor, packet
 
 
@@ -71,3 +73,42 @@ def test_ordinary_epoch_change_preserves_retry_queue(decryptor):
     bridge.snapshot.return_value.last_epoch_change = 2
     bridge.decrypt_audio.return_value = (b'opus', 'ok')
     assert decryptor.pop_recovered_rtp_packets() == [old]
+
+
+def test_receive_callback_does_not_hold_session_lock_while_routing(decryptor):
+    bridge = decryptor._voice_client._dave_bridge
+    bridge.lock = threading.RLock()
+    reader = object.__new__(AudioReader)
+    reader.voice_client = decryptor._voice_client
+    reader._receive_lock = threading.RLock()
+
+    def callback(data):
+        decryptor.decrypt_rtp(packet())
+        acquired = []
+        def sink_thread():
+            held = bridge.lock.acquire(timeout=0.5)
+            acquired.append(held)
+            if held:
+                bridge.lock.release()
+        thread = threading.Thread(target=sink_thread)
+        thread.start()
+        thread.join(1)
+        assert acquired == [True]
+
+    reader._callback = callback
+    reader.callback(b'packet')
+
+
+def test_cleanup_emits_reset_after_last_voice_state_update():
+    client, state = client_state()
+    state.dave_protocol_version = 1
+    state.dave_session = SimpleNamespace(epoch=1, ready=True, status=None)
+    client._dave_state_changed('last_voice_state_update')
+    client.client.dispatch.reset_mock()
+    state.dave_session = None
+    state.dave_protocol_version = 0
+    state.dave_session_generation += 1
+    client.stop = MagicMock()
+    with patch('discord.VoiceClient.cleanup'):
+        client.cleanup()
+    assert ('voice_dave_ready', False) in [call.args for call in client.client.dispatch.call_args_list]

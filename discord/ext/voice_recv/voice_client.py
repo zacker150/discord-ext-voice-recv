@@ -236,7 +236,9 @@ class VoiceRecvClient(discord.VoiceClient):
         return {}
 
     def cleanup(self) -> None:
-        # TODO: Does the order here matter?
+        # The fork resets DAVE in disconnect's finally, after the last VSU.
+        # Emit that final state while local and sink listeners still exist.
+        self._dave_state_changed('cleanup')
         super().cleanup()
         self._event_listeners.clear()
         self.stop()
@@ -355,6 +357,7 @@ class VoiceRecvClient(discord.VoiceClient):
 
     def stop(self) -> None:
         """Stops playing and receiving audio."""
+        self._dave_state_changed('stop')
         self.stop_playing()
         self.stop_listening()
 
