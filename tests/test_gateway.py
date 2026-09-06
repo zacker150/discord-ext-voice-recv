@@ -145,3 +145,13 @@ def test_truncated_binary_frames_do_not_create_diagnostics(connection, frame):
     assert not client._voice_ws_pending_events
     assert ws.seq_ack == -1
     ws._handle_dave_binary.assert_not_called()
+
+
+@pytest.mark.parametrize('duration,warning', [(5.0,False), (25.0,True)])
+def test_binary_hook_reports_native_mls_duration(connection, caplog, duration, warning):
+    client,ws=connection
+    ws.dave_mls_processing_ms=duration
+    with caplog.at_level('DEBUG', logger='discord.ext.voice_recv.gateway'):
+        asyncio.run(gateway.binary_hook(ws,29,7,b'payload'))
+    assert 'duration_ms=' in caplog.text
+    assert ('Slow DAVE MLS processing' in caplog.text) == warning

@@ -51,7 +51,7 @@ class PendingInnerPacket:
     payload: bytes
     reason: str
     queued_at: float
-    attempts: int = 0
+    max_age: float = 10.0
 
 
 @dataclass
@@ -520,6 +520,10 @@ class AudioReader:
         # No need for the whole set_sink() call
         self.sink._voice_client = voice_client
 
+        self._receive_lock = threading.RLock()
+        self._retry_wake = threading.Event()
+        self._retry_stop = threading.Event()
+        self._retry_thread: Optional[threading.Thread] = None
         self.active: bool = False
         self.error: Optional[Exception] = None
 
@@ -571,6 +575,9 @@ class AudioReader:
         self.voice_client._connection.add_socket_listener(self.callback)
         self.keepalive.start()
         self.active = True
+        self._retry_stop.clear()
+        self._retry_thread = threading.Thread(target=self._retry_loop, daemon=True, name="dave-retry")
+        self._retry_thread.start()
 
     def stop(self) -> None:
         if not self.active:
@@ -579,11 +586,15 @@ class AudioReader:
 
         self.voice_client._connection.remove_socket_listener(self.callback)
         self.active = False
+        self._retry_stop.set()
+        self._retry_wake.set()
         self.speaking_timer.notify()
 
         threading.Thread(target=self._stop, name=f'audioreader-stopper-{id(self):x}').start()
 
     def _stop(self) -> None:
+        if self._retry_thread is not None:
+            self._retry_thread.join()
         try:
             self.packet_router.stop()
         except Exception as e:
@@ -802,7 +813,30 @@ class AudioReader:
         self.speaking_timer.notify(ssrc)
         self.packet_router.feed_rtp(rtp_packet)
 
+    def wake_dave_retry(self) -> None:
+        self._retry_wake.set()
+
+    def _retry_loop(self) -> None:
+        while not self._retry_stop.is_set():
+            self._retry_wake.wait(0.1)
+            self._retry_wake.clear()
+            if self._retry_stop.is_set():
+                break
+            try:
+                with self._receive_lock:
+                    for packet in self.decryptor.pop_recovered_rtp_packets():
+                        self._route_rtp_packet(packet)
+            except Exception as exc:
+                self.error = exc
+                log.exception('Error retrying DAVE audio')
+                self.stop()
+                break
+
     def callback(self, packet_data: bytes) -> None:
+        with self._receive_lock:
+            self._callback(packet_data)
+
+    def _callback(self, packet_data: bytes) -> None:
         packet = rtp_packet = rtcp_packet = None
         recovered_rtp_packets: list[RTPPacket] = []
         defer_current_rtp = False
@@ -871,6 +905,8 @@ class AudioReader:
                 for recovered in recovered_rtp_packets:
                     self._route_rtp_packet(recovered)
 
+                if rtp_packet.extension_data.get('_voice_recv_dropped'):
+                    return
                 if defer_current_rtp:
                     self.analysis_stats.inc('dave_inner_defer_current_skipped')
                     return
@@ -910,9 +946,8 @@ class PacketDecryptor:
         self._stats = stats
         self._pending_inner_packets: dict[int, list[PendingInnerPacket]] = defaultdict(list)
         self._pending_inner_ready: list[RTPPacket] = []
-        self._pending_inner_max_per_ssrc = 128
-        self._pending_inner_max_attempts = 16
-        self._pending_inner_max_age_sec = 2.5
+        self._pending_inner_max_per_ssrc = 1024
+        self._last_epoch_change: Optional[float] = None
 
     def _make_box(self, secret_key: bytes) -> EncryptionBox:
         if self.mode.startswith("aead"):
@@ -924,7 +959,8 @@ class PacketDecryptor:
         self.box = self._make_box(secret_key)
 
     def close(self) -> None:
-        return
+        self._pending_inner_packets.clear()
+        self._pending_inner_ready.clear()
 
     def _inc(self, key: str, value: int = 1) -> None:
         if self._stats:
@@ -975,94 +1011,72 @@ class PacketDecryptor:
         ranges_count: int,
     ) -> None:
         queue = self._pending_inner_packets[packet.ssrc]
-        queue.append(
-            PendingInnerPacket(
-                packet=packet,
-                payload=bytes(payload),
-                reason=reason,
-                queued_at=time.monotonic(),
-            )
-        )
-
+        now = time.monotonic()
+        state = self._bridge_state()
+        grace = state is not None and state.epoch_prepared_at is not None and now - state.epoch_prepared_at < 5.0
+        queue.append(PendingInnerPacket(packet, bytes(payload), reason, now, 15.0 if grace else 10.0))
+        # Signed 16-bit distance preserves order across RTP sequence rollover.
+        anchor = queue[0].packet.sequence
+        queue.sort(key=lambda item: ((item.packet.sequence - anchor + 32768) % 65536) - 32768)
         packet.extension_data['_voice_recv_pending_inner_decrypt'] = True
         packet.extension_data['_voice_recv_needs_dave_inner_decrypt'] = True
         packet.extension_data['_voice_recv_dave_ranges_count'] = ranges_count
-
         self._inc('dave_inner_defer_queued')
         self._inc(f'dave_inner_defer_reason_{reason}')
+        if len(queue) > self._pending_inner_max_per_ssrc:
+            dropped = queue.pop(0)
+            dropped.packet.extension_data['_voice_recv_pending_inner_decrypt'] = False
+            dropped.packet.extension_data['_voice_recv_dropped'] = True
+            self._inc('dave_inner_defer_drop_overflow')
 
-        if len(queue) <= self._pending_inner_max_per_ssrc:
-            return
+    def _bridge_state(self):
+        if self._voice_client is None:
+            return None
+        state = self._voice_client._dave_bridge.snapshot()
+        if state.last_epoch_change != self._last_epoch_change:
+            if self._stats:
+                self._stats.reset_all_dave_nonces()
+            self._last_epoch_change = state.last_epoch_change
+        return state
 
-        dropped = queue.pop(0)
-        dropped.packet.extension_data['_voice_recv_pending_inner_decrypt'] = False
-        dropped.packet.extension_data['_voice_recv_needs_dave_inner_decrypt'] = True
-        self._inc('dave_inner_defer_drop_overflow')
-        self._add_dave_unhandled_sample(
-            reason='inner_defer_overflow',
-            packet=dropped.packet,
-            payload_len=len(dropped.payload),
-            has_marker=True,
-            ranges_count=dropped.packet.extension_data.get('_voice_recv_dave_ranges_count'),
-        )
+    def _plaintext_rejected(self, payload: bytes, state) -> bool:
+        return (state is not None and state.protocol_version > 0 and state.ready
+                and not state.downgrade_allowed and not payload.endswith(b'\xfa\xfa'))
 
     def _drain_pending_inner_packets(self) -> None:
-        if not self._pending_inner_packets:
-            return
-
+        state = self._bridge_state()
         now = time.monotonic()
         for ssrc, queue in list(self._pending_inner_packets.items()):
-            kept: list[PendingInnerPacket] = []
+            kept = []
+            blocked = False
             for pending in queue:
-                age = now - pending.queued_at
-                if age > self._pending_inner_max_age_sec:
-                    pending.packet.extension_data['_voice_recv_pending_inner_decrypt'] = False
-                    self._inc('dave_inner_defer_drop_expired')
-                    self._add_dave_unhandled_sample(
-                        reason='inner_defer_expired',
-                        packet=pending.packet,
-                        payload_len=len(pending.payload),
-                        has_marker=True,
-                        ranges_count=pending.packet.extension_data.get('_voice_recv_dave_ranges_count'),
-                    )
-                    continue
-
-                plain, reason = self._try_dave_inner_decrypt(
-                    pending.packet,
-                    pending.payload,
-                    emit_error_sample=False,
-                )
-                if plain is not None:
-                    pending.packet.decrypted_data = plain
-                    pending.packet.extension_data['_voice_recv_pending_inner_decrypt'] = False
-                    pending.packet.extension_data['_voice_recv_needs_dave_inner_decrypt'] = False
-                    pending.packet.extension_data['_voice_recv_dave_ranges_count'] = 0
-                    pending.packet.extension_data['_voice_recv_dave_inner_deferred_recovered'] = True
-                    self._pending_inner_ready.append(pending.packet)
-                    self._inc('dave_inner_defer_recovered')
-                    continue
-
-                pending.attempts += 1
-                retryable = self._is_retryable_inner_reason(reason)
-                if retryable and pending.attempts < self._pending_inner_max_attempts:
+                packet = pending.packet
+                reason = None
+                if now - pending.queued_at >= pending.max_age:
+                    reason = 'expired'
+                elif self._plaintext_rejected(pending.payload, state):
+                    reason = 'plaintext'
+                    self._inc('dave_plaintext_rejected')
+                elif blocked:
                     kept.append(pending)
                     continue
-
-                pending.packet.extension_data['_voice_recv_pending_inner_decrypt'] = False
-                if retryable:
-                    self._inc('dave_inner_defer_drop_attempts')
-                    drop_reason = 'inner_defer_drop_attempts'
                 else:
-                    self._inc('dave_inner_defer_drop_unrecoverable')
-                    drop_reason = f'inner_defer_drop_{reason}'
-                self._add_dave_unhandled_sample(
-                    reason=drop_reason,
-                    packet=pending.packet,
-                    payload_len=len(pending.payload),
-                    has_marker=True,
-                    ranges_count=pending.packet.extension_data.get('_voice_recv_dave_ranges_count'),
-                )
-
+                    plain, outcome = self._try_dave_inner_decrypt(packet, pending.payload, emit_error_sample=False)
+                    if plain is not None:
+                        packet.decrypted_data = plain
+                        packet.extension_data['_voice_recv_dave_ranges_count'] = 0
+                        packet.extension_data['_voice_recv_dave_inner_deferred_recovered'] = True
+                        self._pending_inner_ready.append(packet)
+                        self._inc('dave_inner_defer_recovered')
+                        continue
+                    if self._is_retryable_inner_reason(outcome):
+                        kept.append(pending)
+                        blocked = True
+                        continue
+                    reason = 'unrecoverable'
+                packet.extension_data['_voice_recv_pending_inner_decrypt'] = False
+                packet.extension_data['_voice_recv_dropped'] = True
+                self._inc(f'dave_inner_defer_drop_{reason}')
             if kept:
                 self._pending_inner_packets[ssrc] = kept
             else:
@@ -1070,9 +1084,6 @@ class PacketDecryptor:
 
     def pop_recovered_rtp_packets(self) -> list[RTPPacket]:
         self._drain_pending_inner_packets()
-        if not self._pending_inner_ready:
-            return []
-
         ready = self._pending_inner_ready
         self._pending_inner_ready = []
         return ready
@@ -1099,6 +1110,8 @@ class PacketDecryptor:
 
         decrypted_bytes, reason = self._voice_client._dave_bridge.decrypt_audio(int(user_id), bytes(payload))
         if decrypted_bytes is None:
+            if reason == 'plaintext_rejected':
+                self._inc('dave_plaintext_rejected')
             self._inc(f'dave_inner_decrypt_{reason}')
             if reason in ('decrypt_error', 'no_decryptor', 'busy'):
                 self._inc('dave_inner_decrypt_err')
@@ -1192,102 +1205,47 @@ class PacketDecryptor:
     def _decrypt_rtp_aead_xchacha20_poly1305_rtpsize(self, packet: RTPPacket) -> bytes:
         result = self._decrypt_rtp_transport_aead_xchacha20_poly1305_rtpsize(packet)
 
-        has_marker = len(result) >= 2 and result[-2:] == b'\xfa\xfa'
+        state = self._bridge_state()
+        has_marker = result.endswith(b'\xfa\xfa')
         parsed = parse_dave_payload(result)
-
-        if has_marker:
-            self._inc('dave_marker_packets')
-
+        self._inc('dave_marker_packets' if has_marker else 'dave_non_marker_packets')
         if parsed:
             self._inc('dave_parse_ok')
             self._add_dave_nonce(ssrc=packet.ssrc, seq=packet.sequence, nonce=parsed.nonce)
+            packet.extension_data['_voice_recv_dave_nonce'] = parsed.nonce
+        elif has_marker:
+            self._inc('dave_parse_fail')
+
+        if self._plaintext_rejected(result, state):
+            self._inc('dave_plaintext_rejected')
+            packet.extension_data['_voice_recv_needs_dave_inner_decrypt'] = True
+            packet.extension_data['_voice_recv_dropped'] = True
+            return b''
+
+        if (state is not None and state.protocol_version > 0) or parsed:
             packet.extension_data['_voice_recv_needs_dave_inner_decrypt'] = True
             packet.extension_data['_voice_recv_pending_inner_decrypt'] = False
-            packet.extension_data['_voice_recv_dave_nonce'] = parsed.nonce
-            packet.extension_data['_voice_recv_dave_ranges_count'] = parsed.ranges_count
+            ranges = parsed.ranges_count if parsed else 0
+            packet.extension_data['_voice_recv_dave_ranges_count'] = ranges
             self._inc('dave_needs_inner_decrypt_packets')
-
-            inner_plain, inner_reason = self._try_dave_inner_decrypt(packet, result)
-            if inner_plain is not None:
+            # Never let a newer packet overtake an unresolved older packet.
+            if self._pending_inner_packets.get(packet.ssrc):
+                plain, reason = None, 'ordered'
+            else:
+                plain, reason = self._try_dave_inner_decrypt(packet, result)
+            if plain is not None:
                 packet.extension_data['_voice_recv_dave_ranges_count'] = 0
-                return inner_plain
-
+                return plain
             self._inc('dave_inner_unresolved_packets')
-            if parsed.ranges_count > 0:
-                self._inc('dave_ranges_nonzero')
-
-            if self._is_retryable_inner_reason(inner_reason):
-                self._defer_pending_inner_packet(
-                    packet=packet,
-                    payload=result,
-                    reason=inner_reason,
-                    ranges_count=parsed.ranges_count,
-                )
+            if reason == 'ordered' or self._is_retryable_inner_reason(reason):
+                self._defer_pending_inner_packet(packet=packet, payload=result, reason=reason, ranges_count=ranges)
                 self._inc('dave_inner_deferred')
-                if parsed.ranges_count > 0:
-                    self._inc('dave_ranges_nonzero_deferred')
-                self._add_dave_unhandled_sample(
-                    reason=f'inner_deferred_{inner_reason}',
-                    packet=packet,
-                    payload_len=len(result),
-                    has_marker=has_marker,
-                    ciphertext_len=parsed.ciphertext_len,
-                    ranges_count=parsed.ranges_count,
-                )
             else:
+                packet.extension_data['_voice_recv_dropped'] = True
                 self._inc('dave_inner_unavailable_skipped')
-                log.warning(
-                    "DAVE inner decrypt unavailable; skipping packet: ssrc=%s seq=%s ts=%s reason=%s ranges=%s ciphertext_len=%s",
-                    packet.ssrc,
-                    packet.sequence,
-                    packet.timestamp,
-                    inner_reason,
-                    parsed.ranges_count,
-                    parsed.ciphertext_len,
-                )
-                if parsed.ranges_count == 0 and 0 < parsed.ciphertext_len <= len(result):
-                    self._add_dave_unhandled_sample(
-                        reason=f'inner_unavailable_{inner_reason}',
-                        packet=packet,
-                        payload_len=len(result),
-                        has_marker=has_marker,
-                        ciphertext_len=parsed.ciphertext_len,
-                        ranges_count=parsed.ranges_count,
-                    )
-                elif parsed.ranges_count > 0:
-                    self._add_dave_unhandled_sample(
-                        reason=f'ranges_nonzero_{inner_reason}',
-                        packet=packet,
-                        payload_len=len(result),
-                        has_marker=has_marker,
-                        ciphertext_len=parsed.ciphertext_len,
-                        ranges_count=parsed.ranges_count,
-                    )
-                else:
-                    self._add_dave_unhandled_sample(
-                        reason=f'invalid_ciphertext_len_{inner_reason}',
-                        packet=packet,
-                        payload_len=len(result),
-                        has_marker=has_marker,
-                        ciphertext_len=parsed.ciphertext_len,
-                        ranges_count=parsed.ranges_count,
-                    )
-            self._inc('dave_strip_unhandled')
-        else:
-            if has_marker:
-                self._inc('dave_parse_fail')
-                self._inc('dave_strip_unhandled')
-                packet.extension_data['_voice_recv_needs_dave_inner_decrypt'] = True
-                packet.extension_data['_voice_recv_pending_inner_decrypt'] = False
-                self._add_dave_unhandled_sample(
-                    reason='parse_fail',
-                    packet=packet,
-                    payload_len=len(result),
-                    has_marker=has_marker,
-                )
-            else:
-                self._inc('dave_non_marker_packets')
-
+        elif has_marker:
+            packet.extension_data['_voice_recv_needs_dave_inner_decrypt'] = True
+            packet.extension_data['_voice_recv_dropped'] = True
         return result
 
     def _decrypt_rtcp_aead_xchacha20_poly1305_rtpsize(self, data: bytes) -> bytes:

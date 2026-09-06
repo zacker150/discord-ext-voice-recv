@@ -34,6 +34,7 @@ class Packet:
         self.extended = False
         self.data = b'payload'
         self.decrypted_data = None
+        self.extension_data = {}
         self._silence = silence
 
     def is_silence(self) -> bool:
@@ -42,6 +43,7 @@ class Packet:
 
 def make_reader(*, known_ssrcs: dict[int, int] | None = None, media_kind='audio') -> AudioReader:
     reader = object.__new__(AudioReader)
+    reader._receive_lock = threading.RLock()
     reader.analysis_stats = Stats()
     reader._pending_unknown_lock = threading.RLock()
     reader._pending_unknown_packets = defaultdict(deque)

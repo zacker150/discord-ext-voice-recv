@@ -30,6 +30,8 @@ class DaveState:
     # Time this bridge observed an epoch change or session replacement.
     last_epoch_change: Optional[float]
     ready: bool
+    downgrade_allowed: bool = False
+    epoch_prepared_at: Optional[float] = None
 
 
 class DaveBridge:
@@ -43,6 +45,7 @@ class DaveBridge:
     def __init__(self, connection: VoiceConnectionState):
         self._connection = connection
         self.lock = connection.dave_lock
+        self._epoch_prepared_at: Optional[float] = None
         self._session: Optional[davey.DaveSession] = None
         self._state = DaveState(0, None, None, frozenset(), None, False)
 
@@ -61,8 +64,15 @@ class DaveBridge:
             pending_transition_ids=frozenset(self._connection.dave_pending_transitions),
             last_epoch_change=changed_at,
             ready=version > 0 and session is not None and session.ready,
+            downgrade_allowed=self._connection.dave_downgraded or 0 in self._connection.dave_pending_transitions.values(),
+            epoch_prepared_at=self._epoch_prepared_at,
         )
         return self._state
+
+    def epoch_prepared(self, epoch: int) -> None:
+        if epoch == 1:
+            with self.lock:
+                self._epoch_prepared_at = time.monotonic()
 
     def snapshot(self) -> DaveState:
         with self.lock:
@@ -74,6 +84,8 @@ class DaveBridge:
                 state = self._refresh_locked()
                 if not state.ready:
                     return None, 'session_not_ready'
+                if not state.downgrade_allowed and not payload.endswith(b'\xfa\xfa'):
+                    return None, 'plaintext_rejected'
                 session = self._connection.dave_session
                 assert session is not None
                 return bytes(session.decrypt(user_id, davey.MediaType.audio, payload)), 'ok'
