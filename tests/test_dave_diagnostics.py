@@ -48,7 +48,7 @@ def test_stats_snapshot_includes_session_without_holding_counter_lock():
 def test_client_verification_accepts_id_and_member():
     client, _ = client_state()
     with patch('discord.VoiceClient.get_dave_verification_code', return_value='123') as get:
-        assert client.get_dave_verification_code(42) == '123'
+        assert client.get_dave_verification_code(user_id=42) == '123'
         get.assert_called_with(42)
         assert client.get_dave_verification_code(SimpleNamespace(id=43)) == '123'
         get.assert_called_with(43)

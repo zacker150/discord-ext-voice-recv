@@ -245,9 +245,9 @@ class VoiceRecvClient(discord.VoiceClient):
         """Return sorted MLS member IDs, or an empty tuple without a group."""
         return self._dave_bridge.member_ids()
 
-    def get_dave_verification_code(self, member: Union[discord.Member, discord.User, int]) -> Optional[str]:
+    def get_dave_verification_code(self, user_id: Union[discord.Member, discord.User, int]) -> Optional[str]:
         """Return the current pairwise code for a member or user ID when ready."""
-        return super().get_dave_verification_code(member if isinstance(member, int) else member.id)
+        return super().get_dave_verification_code(user_id if isinstance(user_id, int) else user_id.id)
 
     def cleanup(self) -> None:
         # The fork resets DAVE in disconnect's finally, after the last VSU.
