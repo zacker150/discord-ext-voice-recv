@@ -12,6 +12,8 @@ def test_connection_uses_native_hooks_without_patching_websocket():
     client = object.__new__(voice_client.VoiceRecvClient)
     client.client = MagicMock()
     state = client.create_connection_state()
+    assert client._dave_bridge.lock is state.dave_lock
+    assert not client._dave_bridge.snapshot().ready
     assert state.hook is gateway.hook
     assert state.binary_hook is gateway.binary_hook
     assert DiscordVoiceWebSocket.received_binary_message is original

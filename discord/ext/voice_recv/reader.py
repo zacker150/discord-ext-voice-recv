@@ -19,11 +19,6 @@ from .sinks import AudioSink
 from .router import PacketRouter, SinkEventRouter
 
 try:
-    import davey
-except ImportError:
-    davey = None
-
-try:
     import nacl.secret
     from nacl.exceptions import CryptoError
 except ImportError as e:
@@ -964,7 +959,8 @@ class PacketDecryptor:
     @staticmethod
     def _is_retryable_inner_reason(reason: str) -> bool:
         return reason in {
-            'no_session',
+            'no_decryptor',
+            'busy',
             'session_not_ready',
             'no_user_id',
             'decrypt_error',
@@ -1092,50 +1088,28 @@ class PacketDecryptor:
         *,
         emit_error_sample: bool = True,
     ) -> tuple[Optional[bytes], str]:
-        if davey is None:
-            self._inc('dave_inner_decrypt_no_davey')
-            return None, 'no_davey'
-
         if self._voice_client is None:
             self._inc('dave_inner_decrypt_no_voice_client')
             return None, 'no_voice_client'
-
-        state = getattr(self._voice_client, '_connection', None)
-        session = getattr(state, 'dave_session', None)
-        if session is None:
-            self._inc('dave_inner_decrypt_no_session')
-            return None, 'no_session'
-
-        if not getattr(session, 'ready', False):
-            self._inc('dave_inner_decrypt_session_not_ready')
-            return None, 'session_not_ready'
 
         user_id = self._voice_client._get_id_from_ssrc(packet.ssrc)
         if user_id is None:
             self._inc('dave_inner_decrypt_no_user_id')
             return None, 'no_user_id'
 
-        try:
-            decrypted = session.decrypt(int(user_id), davey.MediaType.audio, bytes(payload))
-            decrypted_bytes = bytes(decrypted)
-        except Exception as exc:
-            self._inc('dave_inner_decrypt_err')
-            if emit_error_sample:
-                self._add_dave_unhandled_sample(
-                    reason='inner_decrypt_error',
-                    packet=packet,
-                    payload_len=len(payload),
-                    has_marker=True,
-                )
-            log.debug(
-                "DAVE inner decrypt failed: ssrc=%s user_id=%s seq=%s ts=%s err=%s",
-                packet.ssrc,
-                user_id,
-                packet.sequence,
-                packet.timestamp,
-                exc,
-            )
-            return None, 'decrypt_error'
+        decrypted_bytes, reason = self._voice_client._dave_bridge.decrypt_audio(int(user_id), bytes(payload))
+        if decrypted_bytes is None:
+            self._inc(f'dave_inner_decrypt_{reason}')
+            if reason in ('decrypt_error', 'no_decryptor', 'busy'):
+                self._inc('dave_inner_decrypt_err')
+                if emit_error_sample:
+                    self._add_dave_unhandled_sample(
+                        reason=reason,
+                        packet=packet,
+                        payload_len=len(payload),
+                        has_marker=True,
+                    )
+            return None, reason
 
         self._inc('dave_inner_decrypt_ok')
         packet.extension_data['_voice_recv_dave_inner_decrypted'] = True
