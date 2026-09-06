@@ -832,7 +832,7 @@ class AudioReader:
             if self._retry_stop.is_set():
                 break
             try:
-                with self._receive_lock, self._session_lock():
+                with self._receive_lock:
                     for packet in self.decryptor.pop_recovered_rtp_packets():
                         self._route_rtp_packet(packet)
             except Exception as exc:
@@ -842,7 +842,7 @@ class AudioReader:
                 break
 
     def callback(self, packet_data: bytes) -> None:
-        with self._receive_lock, self._session_lock():
+        with self._receive_lock:
             self._callback(packet_data)
 
     def _callback(self, packet_data: bytes) -> None:
@@ -945,7 +945,7 @@ class PacketDecryptor:
     ) -> None:
         self.mode: SupportedModes = mode
         try:
-            self.decrypt_rtp: DecryptRTP = getattr(self, '_decrypt_rtp_' + mode)
+            self._decrypt_rtp: DecryptRTP = getattr(self, '_decrypt_rtp_' + mode)
             self.decrypt_rtcp: DecryptRTCP = getattr(self, '_decrypt_rtcp_' + mode)
         except AttributeError as e:
             raise NotImplementedError(mode) from e
@@ -958,6 +958,14 @@ class PacketDecryptor:
         self._pending_inner_max_per_ssrc = 1024
         self._last_epoch_change: Optional[float] = None
         self._session_generation: Optional[int] = None
+
+    def _session_lock(self):
+        bridge = getattr(self._voice_client, '_dave_bridge', None)
+        return bridge.lock if bridge is not None else nullcontext()
+
+    def decrypt_rtp(self, packet: RTPPacket) -> bytes:
+        with self._session_lock():
+            return self._decrypt_rtp(packet)
 
     def _make_box(self, secret_key: bytes) -> EncryptionBox:
         if self.mode.startswith("aead"):
@@ -1105,10 +1113,11 @@ class PacketDecryptor:
                 del self._pending_inner_packets[ssrc]
 
     def pop_recovered_rtp_packets(self) -> list[RTPPacket]:
-        self._drain_pending_inner_packets()
-        ready = self._pending_inner_ready
-        self._pending_inner_ready = []
-        return ready
+        with self._session_lock():
+            self._drain_pending_inner_packets()
+            ready = self._pending_inner_ready
+            self._pending_inner_ready = []
+            return ready
 
     @staticmethod
     def is_deferred_packet(packet: RTPPacket) -> bool:
