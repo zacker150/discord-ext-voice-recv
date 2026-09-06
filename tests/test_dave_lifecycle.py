@@ -31,6 +31,7 @@ def test_state_edges_dispatch_to_client_and_sink_once():
     expected = [('voice_dave_protocol_version', 1), ('voice_dave_epoch_changed', 1), ('voice_dave_ready', True)]
     assert [c.args for c in client.client.dispatch.call_args_list] == expected
     assert [c.args for c in client._reader.event_router.dispatch.call_args_list] == expected
+    client._reader.sync_dave_session.assert_not_called()
     state.dave_protocol_version = 0
     state.dave_downgraded = True
     client.on_dave_transition_executed(7, 0)
@@ -112,3 +113,24 @@ def test_cleanup_emits_reset_after_last_voice_state_update():
     with patch('discord.VoiceClient.cleanup'):
         client.cleanup()
     assert ('voice_dave_ready', False) in [call.args for call in client.client.dispatch.call_args_list]
+
+
+def test_sink_stop_does_not_wait_for_a_receiver_blocked_on_sink():
+    client, _ = client_state()
+    receiver_lock = threading.Lock()
+    def sync():
+        with receiver_lock:
+            pass
+    client._reader.sync_dave_session.side_effect = sync
+    client.stop_playing = MagicMock()
+    client.stop_listening = MagicMock()
+    stopped = threading.Event()
+    def sink():
+        client.stop()
+        stopped.set()
+    with receiver_lock:
+        thread = threading.Thread(target=sink)
+        thread.start()
+        completed = stopped.wait(0.5)
+    thread.join(1)
+    assert completed, 'sink stop waited for the receiver while receiver waited for the sink'

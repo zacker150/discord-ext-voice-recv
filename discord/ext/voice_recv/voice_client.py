@@ -73,7 +73,9 @@ class VoiceRecvClient(discord.VoiceClient):
         self._dave_event_state = current
         reader = getattr(self, '_reader', None)
         if reader:
-            reader.sync_dave_session()
+            # Never wait for the receive lock here: sink callbacks may hold
+            # the packet router lock. The retry worker checks the generation
+            # under the session lock before touching queued ciphertext.
             reader.wake_dave_retry()
         if current.protocol_version != previous.protocol_version:
             self.dispatch('voice_dave_protocol_version', current.protocol_version)
