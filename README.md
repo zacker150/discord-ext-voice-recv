@@ -73,6 +73,9 @@ decrypted, depacketized into complete VP8 frames, then decrypted with DAVE's vid
 media type. Register a sink `@AudioSink.listener()` method `on_video_packet(self,
 packet: VideoPacket)` to receive encoded bytes in `packet.data`, together with
 user ID, SSRC, RTP timestamp, codec, and media kind. This does not decode pixels.
+Video callbacks run on the sink event thread concurrently with audio `write()`;
+protect any shared application state with your own lock. Slow video processing
+does not hold the audio router lock.
 
 The receiver supports reordered packets within a frame and sequence rollover.
 It drops incomplete frames after one second, on a newer timestamp, or on a new

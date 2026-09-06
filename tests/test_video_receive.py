@@ -7,6 +7,7 @@ import davey
 import pytest
 
 from discord.ext.voice_recv.reader import AudioReader, ReceiveAnalysisStats
+from discord.ext.voice_recv.router import SinkEventRouter
 from discord.ext.voice_recv.video_reader import VideoFrameAssembler, vp8_fragment
 from test_dave_bridge import bridge_state
 
@@ -101,3 +102,31 @@ def test_new_group_cannot_complete_old_video_frame():
     reader.decryptor.decrypt_rtp_transport.return_value = b'\x00last\xfa\xfa'
     reader._receive_video(packet(2, marker=True), 'video')
     bridge.decrypt_video.assert_not_called()
+
+
+def test_slow_video_callback_does_not_lock_audio_router():
+    router = object.__new__(SinkEventRouter)
+    router._lock = threading.RLock()
+    router._end_thread = threading.Event()
+    router._buffer = queue.SimpleQueue()
+    audio_lock = threading.RLock()
+    router.reader = SimpleNamespace(packet_router=SimpleNamespace(_lock=audio_lock))
+    started, release = threading.Event(), threading.Event()
+    def listener(*args, **kwargs):
+        started.set()
+        release.wait(1)
+    router._dispatch_to_listeners = listener
+    router._buffer.put(('video_packet', (), {}))
+    worker = threading.Thread(target=router._do_run)
+    worker.start()
+    try:
+        assert started.wait(1)
+        acquired = audio_lock.acquire(timeout=0.1)
+        if acquired:
+            audio_lock.release()
+        assert acquired
+    finally:
+        router._end_thread.set()
+        release.set()
+        worker.join(2)
+    assert not worker.is_alive()
