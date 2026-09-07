@@ -203,7 +203,9 @@ def test_get_recv_diagnostics_returns_snapshot_when_available():
     assert vc.get_recv_diagnostics() == {'ok': True}
 
     vc._reader = None
-    assert vc.get_recv_diagnostics() == {}
+    vc._dave_bridge = MagicMock()
+    vc._dave_bridge.diagnostics.return_value = {'ready': False}
+    assert vc.get_recv_diagnostics() == {'dave_session': {'ready': False}}
 
 
 def test_listen_validates_connection_sink_type_and_existing_reader():

@@ -62,7 +62,8 @@ class PendingUnknownPacket:
 
 
 class ReceiveAnalysisStats:
-    def __init__(self, *, ws_jsonl_path: str = ""):
+    def __init__(self, *, ws_jsonl_path: str = "", dave_snapshot: Optional[Callable[[], Dict[str, Any]]] = None):
+        self._dave_snapshot = dave_snapshot
         self._lock = threading.Lock()
         self._ws_jsonl_lock = threading.Lock()
         self._counters: dict[str, int] = defaultdict(int)
@@ -499,6 +500,8 @@ class ReceiveAnalysisStats:
         counters['non_audio_rtp_samples'] = non_audio_rtp_samples
         counters['voice_ws_recent_events'] = voice_ws_recent_events
         counters['dave_ws_recent_events'] = dave_ws_recent_events
+        if self._dave_snapshot is not None:
+            counters['dave_session'] = self._dave_snapshot()
         return counters
 
 
@@ -528,7 +531,9 @@ class AudioReader:
         self.active: bool = False
         self.error: Optional[Exception] = None
 
-        self.analysis_stats: ReceiveAnalysisStats = ReceiveAnalysisStats(ws_jsonl_path=ws_jsonl_path)
+        self.analysis_stats: ReceiveAnalysisStats = ReceiveAnalysisStats(
+            ws_jsonl_path=ws_jsonl_path, dave_snapshot=voice_client._dave_diagnostics,
+        )
         self.packet_router: PacketRouter = PacketRouter(sink, self)
         self.event_router: SinkEventRouter = SinkEventRouter(sink, self)
         self.decryptor: PacketDecryptor = PacketDecryptor(

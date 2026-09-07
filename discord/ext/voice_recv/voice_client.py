@@ -235,7 +235,19 @@ class VoiceRecvClient(discord.VoiceClient):
     def get_recv_diagnostics(self) -> Dict[str, Any]:
         if self._reader and hasattr(self._reader, 'analysis_stats'):
             return self._reader.analysis_stats.snapshot()
-        return {}
+        return {'dave_session': self._dave_diagnostics()}
+
+    def _dave_diagnostics(self) -> Dict[str, Any]:
+        audio_ssrcs = {ssrc: uid for uid, ssrc in self._id_to_ssrc.copy().items()}
+        return self._dave_bridge.diagnostics(audio_ssrcs)
+
+    def dave_member_ids(self) -> tuple[int, ...]:
+        """Return sorted MLS member IDs, or an empty tuple without a group."""
+        return self._dave_bridge.member_ids()
+
+    def get_dave_verification_code(self, user_id: Union[discord.Member, discord.User, int]) -> Optional[str]:
+        """Return the current pairwise code for a member or user ID when ready."""
+        return super().get_dave_verification_code(user_id if isinstance(user_id, int) else user_id.id)
 
     def cleanup(self) -> None:
         # The fork resets DAVE in disconnect's finally, after the last VSU.
