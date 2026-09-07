@@ -61,21 +61,49 @@ class VoiceRecvClient(discord.VoiceClient):
             )
         state = VoiceConnectionState(self, hook=hook, binary_hook=binary_hook)
         self._dave_bridge = DaveBridge(state)
+        self._dave_event_state = self._dave_bridge.snapshot()
         return state
 
     def _dave_state_changed(self, reason: str) -> None:
+        bridge = getattr(self, '_dave_bridge', None)
+        if bridge is None:
+            return
+        current = bridge.snapshot()
+        previous = self._dave_event_state
+        self._dave_event_state = current
         reader = getattr(self, '_reader', None)
         if reader:
+            # Never wait for the receive lock here: sink callbacks may hold
+            # the packet router lock. The retry worker checks the generation
+            # under the session lock before touching queued ciphertext.
             reader.wake_dave_retry()
+        if current.protocol_version != previous.protocol_version:
+            self.dispatch('voice_dave_protocol_version', current.protocol_version)
+        if current.epoch != previous.epoch or current.generation != previous.generation:
+            self.dispatch('voice_dave_epoch_changed', current.epoch)
+        if current.ready != previous.ready or (current.ready and current.generation != previous.generation):
+            self.dispatch('voice_dave_ready', current.ready)
+        if previous.protocol_version > 0 and current.protocol_version == 0 and current.downgrade_allowed:
+            self.dispatch('voice_dave_downgraded')
+
+    def on_dave_transition_prepared(self, transition_id: int, protocol_version: int) -> None:
+        self._dave_state_changed('transition_prepared')
+        self.dispatch('voice_dave_prepare_transition', transition_id, protocol_version)
+
+    def on_dave_transition_executed(self, transition_id: int, protocol_version: int) -> None:
+        self._dave_state_changed('transition_executed')
+        self.dispatch('voice_dave_execute_transition', transition_id, protocol_version)
 
     def on_dave_epoch_prepared(self, epoch: int, protocol_version: int) -> None:
         self._dave_bridge.epoch_prepared(epoch)
         self._dave_state_changed('epoch_prepared')
+        self.dispatch('voice_dave_prepare_epoch', epoch, protocol_version)
 
     async def on_voice_state_update(self, data) -> None:
         old_channel_id = self.channel.id if self.channel else None
 
         await super().on_voice_state_update(data)
+        self._dave_state_changed('voice_state_update')
 
         log.debug("Got voice_client VSU: \n%s", pformat(data, compact=True))
 
@@ -210,7 +238,9 @@ class VoiceRecvClient(discord.VoiceClient):
         return {}
 
     def cleanup(self) -> None:
-        # TODO: Does the order here matter?
+        # The fork resets DAVE in disconnect's finally, after the last VSU.
+        # Emit that final state while local and sink listeners still exist.
+        self._dave_state_changed('cleanup')
         super().cleanup()
         self._event_listeners.clear()
         self.stop()
@@ -329,6 +359,7 @@ class VoiceRecvClient(discord.VoiceClient):
 
     def stop(self) -> None:
         """Stops playing and receiving audio."""
+        self._dave_state_changed('stop')
         self.stop_playing()
         self.stop_listening()
 

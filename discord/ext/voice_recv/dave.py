@@ -32,6 +32,7 @@ class DaveState:
     ready: bool
     downgrade_allowed: bool = False
     epoch_prepared_at: Optional[float] = None
+    generation: int = 0
 
 
 class DaveBridge:
@@ -52,9 +53,12 @@ class DaveBridge:
     def _refresh_locked(self) -> DaveState:
         session = self._connection.dave_session
         version = self._connection.dave_protocol_version
+        generation = getattr(self._connection, 'dave_session_generation', 0)
+        if generation != self._state.generation:
+            self._epoch_prepared_at = None
         epoch = session.epoch if session is not None else None
         changed_at = self._state.last_epoch_change
-        if session is not self._session or epoch != self._state.epoch:
+        if session is not self._session or epoch != self._state.epoch or generation != self._state.generation:
             changed_at = time.monotonic()
         self._session = session
         self._state = DaveState(
@@ -66,12 +70,14 @@ class DaveBridge:
             ready=version > 0 and session is not None and session.ready,
             downgrade_allowed=self._connection.dave_downgraded or 0 in self._connection.dave_pending_transitions.values(),
             epoch_prepared_at=self._epoch_prepared_at,
+            generation=generation,
         )
         return self._state
 
     def epoch_prepared(self, epoch: int) -> None:
         if epoch == 1:
             with self.lock:
+                self._refresh_locked()
                 self._epoch_prepared_at = time.monotonic()
 
     def snapshot(self) -> DaveState:

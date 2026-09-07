@@ -537,7 +537,7 @@ wheels = [
 
 [[package]]
 name = "discord-ext-voice-recv"
-version = "0.5.3a194"
+version = "0.5.3a195"
 source = { editable = "." }
 dependencies = [
     { name = "davey" },
@@ -565,7 +565,7 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "davey", specifier = ">=0.1.6,<0.2" },
-    { name = "discord-py", extras = ["voice"], git = "https://github.com/zacker150/discord.py?rev=40c84ddc82e06c05fe9f4aef6c4739912e429ed9" },
+    { name = "discord-py", extras = ["voice"], git = "https://github.com/zacker150/discord.py?rev=44287ebed119db388542691da2ce30c50a2081df" },
     { name = "pyaudio", marker = "extra == 'extras'", specifier = ">=0.2.14" },
     { name = "pyaudio", marker = "extra == 'extras-local'", specifier = ">=0.2.14" },
     { name = "speechrecognition", marker = "extra == 'extras'", specifier = ">=3.17.0" },
@@ -581,8 +581,8 @@ dev = [
 
 [[package]]
 name = "discord-py"
-version = "2.8.0a5449+g40c84ddc"
-source = { git = "https://github.com/zacker150/discord.py?rev=40c84ddc82e06c05fe9f4aef6c4739912e429ed9#40c84ddc82e06c05fe9f4aef6c4739912e429ed9" }
+version = "2.8.0a5451+g44287ebe"
+source = { git = "https://github.com/zacker150/discord.py?rev=44287ebed119db388542691da2ce30c50a2081df#44287ebed119db388542691da2ce30c50a2081df" }
 dependencies = [
     { name = "aiohttp" },
     { name = "audioop-lts", marker = "python_full_version >= '3.13'" },
