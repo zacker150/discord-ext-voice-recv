@@ -198,6 +198,10 @@ class SinkEventRouter(threading.Thread):
                 continue
             else:
                 with self._lock:
-                    # this looks dumb
-                    with self.reader.packet_router._lock:
+                    if event == 'video_packet':
+                        # Frame consumers can be slow. Serialize with sink
+                        # replacement, but never hold up audio ingest/decoding.
                         self._dispatch_to_listeners(event, *args, **kwargs)
+                    else:
+                        with self.reader.packet_router._lock:
+                            self._dispatch_to_listeners(event, *args, **kwargs)

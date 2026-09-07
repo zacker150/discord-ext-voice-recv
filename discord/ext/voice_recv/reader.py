@@ -17,6 +17,7 @@ from typing import TYPE_CHECKING
 from . import rtp
 from .dave import parse_dave_payload
 from .sinks import AudioSink
+from .video_reader import VideoFrameAssembler, VideoPacket
 from .router import PacketRouter, SinkEventRouter
 
 try:
@@ -525,6 +526,8 @@ class AudioReader:
         self.sink._voice_client = voice_client
 
         self._receive_lock = threading.RLock()
+        self._video_frames = VideoFrameAssembler()
+        self._video_generation: Optional[int] = None
         self._retry_wake = threading.Event()
         self._retry_stop = threading.Event()
         self._retry_thread: Optional[threading.Thread] = None
@@ -872,6 +875,12 @@ class AudioReader:
                         known_user=(self.voice_client._get_id_from_ssrc(packet.ssrc) is not None),
                         extended=packet.extended,
                     )
+                    if media_kind in ('video', 'screen'):
+                        try:
+                            self._receive_video(packet, media_kind)
+                        except Exception:
+                            self.analysis_stats.inc('video_receive_error')
+                            log.exception('Error receiving video frame')
                     return
 
                 packet.decrypted_data = self.decryptor.decrypt_rtp(packet)
@@ -932,6 +941,43 @@ class AudioReader:
                 self.stop()
 
 
+    def _receive_video(self, packet: RTPPacket, media_kind: str) -> None:
+        vc = self.voice_client
+        codec = getattr(vc, 'video_payload_types', {}).get(packet.payload)
+        if codec != 'vp8':
+            self.analysis_stats.inc('video_unsupported_codec')
+            return
+        uid = vc._get_id_from_ssrc(packet.ssrc)
+        if uid is None:
+            self.analysis_stats.inc('video_unknown_user')
+            return
+        with vc._dave_bridge.lock:
+            state = vc._dave_bridge.snapshot()
+            if state.generation != self._video_generation:
+                self._video_frames.reset()
+                self._video_generation = state.generation
+            payload = self.decryptor.decrypt_rtp_transport(packet)
+            try:
+                encoded = self._video_frames.push(packet, payload)
+            except ValueError:
+                self.analysis_stats.inc('video_invalid_frame')
+                return
+            if encoded is None:
+                return
+            decrypted, reason = vc._dave_bridge.decrypt_video(uid, encoded)
+        if decrypted is None:
+            self.analysis_stats.inc(f'video_decrypt_{reason}')
+            return
+        # Video can be large. Bound queued video events if a sink is slow.
+        if self.event_router._buffer.qsize() >= 8:
+            self.analysis_stats.inc('video_sink_overflow')
+            return
+        self.analysis_stats.inc('video_frames_delivered')
+        self.event_router.dispatch('video_packet', VideoPacket(
+            uid, packet.ssrc, packet.timestamp, codec, decrypted, media_kind,
+        ))
+
+
 class PacketDecryptor:
     supported_modes: list[SupportedModes] = [
         'aead_xchacha20_poly1305_rtpsize',
@@ -971,6 +1017,12 @@ class PacketDecryptor:
     def decrypt_rtp(self, packet: RTPPacket) -> bytes:
         with self._session_lock():
             return self._decrypt_rtp(packet)
+
+    def decrypt_rtp_transport(self, packet: RTPPacket) -> bytes:
+        """Remove transport encryption without applying audio DAVE handling."""
+        if self.mode == 'aead_xchacha20_poly1305_rtpsize':
+            return self._decrypt_rtp_transport_aead_xchacha20_poly1305_rtpsize(packet)
+        return self._decrypt_rtp(packet)
 
     def _make_box(self, secret_key: bytes) -> EncryptionBox:
         if self.mode.startswith("aead"):

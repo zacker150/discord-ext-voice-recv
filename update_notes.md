@@ -1,6 +1,10 @@
 # Update notes
 Notably, not a changelog, just notes.
 
+## 0.5.3a197
+- Add opt-in VP8 video/screen frame assembly, DAVE video decryption, and bounded
+  `on_video_packet` sink delivery. No pixel decoding or retransmission recovery.
+
 ## 0.5.3a196
 - Add MLS membership and member verification-code helpers, session diagnostics,
   and fresh native per-user decryption statistics keyed by audio SSRC.

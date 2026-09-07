@@ -61,9 +61,33 @@ the same user share that user's totals.
 Useful receive counters include `dave_inner_decrypt_ok`, `dave_plaintext_rejected`,
 `dave_inner_defer_drop_expired`, `dave_inner_defer_drop_overflow`, and
 `dave_inner_defer_drop_session_reset`. Inspect RTP counts before attributing
-silence to decryption. Video/screen SSRCs are currently counted but not decoded
-or delivered as media. Privacy codes identify the group; compare participant
+silence to decryption. Privacy codes identify the group; compare participant
 verification codes through a trusted channel when identity verification matters.
+
+### Experimental VP8 video receive
+
+Video receive is opt-in: set `voice_client.video_payload_types = {payload_type: 'vp8'}`
+using the RTP payload type negotiated for the session. Payload numbers are not
+guessed. Video and screen SSRCs announced by the voice gateway are transport
+decrypted, depacketized into complete VP8 frames, then decrypted with DAVE's video
+media type. Register a sink `@AudioSink.listener()` method `on_video_packet(self,
+packet: VideoPacket)` to receive encoded bytes in `packet.data`, together with
+user ID, SSRC, RTP timestamp, codec, and media kind. This does not decode pixels.
+Video callbacks run on the sink event thread concurrently with audio `write()`;
+protect any shared application state with your own lock. Slow video processing
+does not hold the audio router lock.
+
+The receiver supports reordered packets within a frame and sequence rollover.
+It drops incomplete frames after one second, on a newer timestamp, or on a new
+DAVE group. Assembly is bounded to 16 streams and 4 MiB per frame; at most eight
+pending events are allowed before new video frames are dropped. Counts appear as
+`video_frames_delivered`, `video_sink_overflow`, `video_invalid_frame`,
+`video_unsupported_codec`, and `video_decrypt_<reason>`.
+
+H264, VP9, AV1, retransmission/FEC recovery, codec negotiation, and separate Go Live
+stream connections are not implemented. Unsupported payloads remain counted and
+never enter the audio decoder. This experimental milestone needs a live VP8
+capture before production use; offline tests do not establish Discord forwarding.
 
 ## Development
 This project uses `uv` for dependency management and builds.
