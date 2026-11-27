@@ -5,6 +5,7 @@ from .voice_client import *
 from .reader import *
 from .sinks import *
 from .video import *
+from .video_reader import VideoPacket as VideoPacket
 from .opus import *
 from .rtp import *
 from .dave import *

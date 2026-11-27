@@ -106,6 +106,25 @@ class DaveBridge:
             session = self._connection.dave_session
             return tuple(sorted(int(uid) for uid in session.get_user_ids())) if session is not None else ()
 
+    def decrypt_video(self, user_id: int, payload: bytes) -> tuple[Optional[bytes], str]:
+        """Decrypt a complete depacketized encoded video frame under the MLS lock."""
+        try:
+            with self.lock:
+                state = self._refresh_locked()
+                if state.protocol_version == 0:
+                    return payload, 'ok'
+                if not state.ready:
+                    return None, 'session_not_ready'
+                if not state.downgrade_allowed and not payload.endswith(b'\xfa\xfa'):
+                    return None, 'plaintext_rejected'
+                session = self._connection.dave_session
+                assert session is not None
+                return bytes(session.decrypt(user_id, davey.MediaType.video, payload)), 'ok'
+        except RuntimeError:
+            return None, 'busy'
+        except ValueError as exc:
+            return None, 'no_decryptor' if 'NoDecryptorForUser' in str(exc) else 'decrypt_error'
+
     def diagnostics(self, audio_ssrcs: dict[int, int]) -> dict:
         """Copy native diagnostics under the lock; never retain native stats objects."""
         with self.lock:

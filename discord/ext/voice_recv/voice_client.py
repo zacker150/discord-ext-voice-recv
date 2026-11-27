@@ -42,6 +42,9 @@ class VoiceRecvClient(discord.VoiceClient):
         super().__init__(client, channel)
 
         self._reader: AudioReader = MISSING
+        # RTP payload types are negotiated, not globally assigned. Opt in with
+        # the VP8 payload type from the session being received.
+        self.video_payload_types: Dict[int, str] = {}
         self._ssrc_to_id: Dict[int, int] = {}
         self._id_to_ssrc: Dict[int, int] = {}
         self._ssrc_media_kind: Dict[int, str] = {}
